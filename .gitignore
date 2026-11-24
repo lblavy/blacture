@@ -1,0 +1,76 @@
+# Dépendances / builds
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+**/target/
+**/.gradle/
+**/.cxx/
+**/local.properties
+*.apk
+*.aab
+*.msi
+*.exe
+# Tests et analyses locales
+artifacts/
+test-results/
+playwright-report/
+reports/
+*.log
+# Données privées et corpus (utiliser samples/private/ ou chemins externes)
+/samples/private/
+/samples/local-paths.md
+/data/
+/storage/
+/imports/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm
+# Secrets, clés et paramètres locaux
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.jks
+*.keystore
+credentials*.json
+client_secret*.json
+*service-account*.json
+token*.json
+# IDE / OS
+.idea/
+.vscode/*.local.json
+.DS_Store
+Thumbs.db
+
+
+
+# Secrets et configurations privées complémentaires
+/secrets/
+/credentials/
+/.local/
+*.local.json
+*.p12
+*.pfx
+**/keystore.properties
+**/key.properties
+**/google-services.json
+
+# Documents et archives potentiellement privés
+*.pdf
+*.epub
+*.mobi
+*.zip
+
+# Fichiers de développement locaux
+*.local.toml
+*.local.yaml
+*.local.yml
