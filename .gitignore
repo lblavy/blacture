@@ -9,6 +9,7 @@ coverage/
 **/.cxx/
 **/local.properties
 *.apk
+*.apks
 *.aab
 *.msi
 *.exe
@@ -33,17 +34,28 @@ reports/
 *.db-shm
 *.sqlite3-wal
 *.sqlite3-shm
+*.sqlite-journal
+*.sqlite3-journal
+*.db-journal
 # Secrets, clés et paramètres locaux
 .env
 .env.*
 !.env.example
+.envrc
 *.pem
 *.key
+*.ppk
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
 *.jks
 *.keystore
 credentials*.json
 client_secret*.json
+client-secret*.json
 *service-account*.json
+*service_account*.json
 token*.json
 # IDE / OS
 .idea/
@@ -69,8 +81,19 @@ Thumbs.db
 *.epub
 *.mobi
 *.zip
+*.7z
+*.rar
+*.tar.gz
 
 # Fichiers de développement locaux
 *.local.toml
 *.local.yaml
 *.local.yml
+
+
+/work/
+
+# Prototype Tauri historique conservé en local
+/src-tauri/
+/scripts/test-e2e-android.ps1
+/scripts/test-e2e-windows.ps1

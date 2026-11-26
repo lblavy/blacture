@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f8f5ee" />
+    <title>Blacture</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon-192.png" />
+  </head>
+  <body>
+    <header>
+      <h1>Blacture</h1>
+      <p id="offline-status" role="status"></p>
+      <button type="button" id="update" hidden>Mettre à jour</button>
+    </header>
+    <main>
+      <section>
+        <h2>Importer un ouvrage</h2>
+        <form id="import-form">
+          <label for="markdown-file">Fichier Markdown</label>
+          <input
+            type="file"
+            id="markdown-file"
+            accept=".md,.markdown,text/markdown"
+            required
+          />
+          <div class="actions">
+            <button id="import-submit">Importer</button>
+            <button type="button" id="import-cancel" hidden>Annuler</button>
+          </div>
+        </form>
+        <p id="import-status" role="status"></p>
+        <ul id="import-diagnostics" hidden></ul>
+      </section>
+      <section>
+        <h2>Ouvrages importés</h2>
+        <ul id="catalog"></ul>
+        <article
+          id="fragment-preview"
+          aria-label="Aperçu du premier fragment"
+        ></article>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

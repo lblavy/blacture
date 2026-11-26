@@ -1,19 +1,17 @@
-# Contrôles locaux — contrat à implémenter en B01
+# Développement et contrôles locaux
 
-Aucun script de build ou de qualité opérationnel n'existe encore : la stack applicative reste à valider. Ne pas créer de scripts qui retournent un succès sans exécuter de contrôle. Après B00, implémenter des commandes versionnées, reproductibles et documentées. Préférer le gestionnaire de paquets de la stack et quelques wrappers si nécessaires, sans Docker ni SonarQube.
+Depuis la racine, installer les dépendances verrouillées avec `npm ci`. Utiliser Node 24.12+, npm 11.6.2+ et le Chrome déjà installé. `npm run dev` démarre le serveur local. `npm run build` produit le dossier `dist/`. `npm run preview` sert ce build pour vérifier le Service Worker et l’import.
 
-| Commande indicative (si npm retenu) | Fonction |
+| Commande | Contrôle |
 |---|---|
-| `npm run quality` | Format, lint, typage/compilation applicable, complexité, duplication, tests unitaires/intégration, couverture et gates ; sortie non nulle sur échec |
-| `npm run test:unit` | Tests unitaires rapides et déterministes |
-| `npm run test:integration` | Intégration locale sans Google réel |
-| `npm run test:e2e:web` | Parcours UI communs |
-| `npm run test:e2e:windows` | Exécutable Windows réel |
-| `npm run test:e2e:android` | Application Android réelle sur émulateur/appareil |
-| `npm run test:mutation` | Mutations ciblées, après validation de l'outil |
-| `npm run test:performance` | Benchmarks ciblés |
-| `npm run quality:audit` | Audit des dépendances, accès réseau si nécessaire |
+| `npm run quality` | Typage, lint, complexités, formatage, couverture et duplication TypeScript/HTML/CSS. |
+| `npm test` | Tests Vitest sans seuil de couverture. |
+| `npm run test:e2e` | Build puis parcours Playwright dans Chrome sur une origine loopback isolée. |
+| `npm run quality:audit` | Audit des dépendances npm. |
+| `pwsh -NoProfile -File scripts/scan-secrets.ps1` | Gitleaks sur l’historique accessible, l’index, le diff suivi et les fichiers non suivis non ignorés. |
 
-Les noms sont indicatifs. Vérifier les dépendances requises, retourner un diagnostic clair et un code non nul si une commande obligatoire ne peut pas fonctionner. Aucun faux succès en cas d'environnement absent. Les suites longues et les tests Drive réel se lancent séparément aux jalons concernés. Les audits dépendant du réseau peuvent être séparés de `quality` pour que la boucle TDD reste utilisable hors ligne ; exécuter l'audit aux changements de dépendances et jalons. Les seuils et leur portée sont définis dans `QUALITY.md` ; toute configuration machine devra les refléter, avec test d'échec intentionnel en B01.
+Les seuils et les preuves système figurent dans [QUALITY.md](../QUALITY.md). Lancer une seule couverture à la fois dans le même dossier de rapports. Réserver les parcours Android du sélecteur et de son annulation au téléphone réel. Les mesures de l’émulateur sont consignées à part.
 
-Les rapports, traces et captures doivent aller dans les répertoires ignorés par Git. Prévoir nettoyage des processus temporaires et données de test, sans effacer les données personnelles. Documenter les prérequis Windows/Android, les commandes d'installation locales et les alternatives si un outil est trop coûteux.
+Le propriétaire effectue les opérations de publication sur Cloudflare Pages. Le build B02 est accessible sur l’origine canonique pour les essais Android. Le prototype B01 reste disponible dans `work/pwa-b01/`. Les ouvrages privés sont sélectionnés en lecture seule et leurs données sont traitées dans le navigateur, sans ajout au build.
+
+Les preuves historiques Tauri, MAUI et Smart App Control sont dans [BACKLOG.md](../BACKLOG.md). La copie locale ignorée `work/tauri-b01/` conserve le shell Tauri, ses scripts et son verrou d’origine. Le projet Rust et Android historique reste dans `src-tauri/`. Les prototypes MAUI et PWA B01 restent dans `work/`.

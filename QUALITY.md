@@ -1,12 +1,12 @@
 # Qualité, tests et validation locale
 
-Objectif : qualité exigeante et vérifiable, proportionnée à un projet personnel. Pas de SonarQube, Docker, service d'analyse distant ou infrastructure de CI obligatoire. Les contrôles seront des scripts locaux versionnés et exécutables par Codex. Les outils exacts seront choisis après la stack (B00/B01). Les seuils ci-dessous sont les valeurs initiales retenues ; tout ajustement significatif doit être discuté avec le propriétaire.
+Les contrôles de Blacture sont des scripts locaux versionnés et exécutables par Codex. Une commande rapide sert à la boucle TDD. Les audits, E2E et mesures disposent de commandes distinctes. Tout ajustement significatif des seuils ou exclusions requiert un arbitrage du propriétaire.
 
 ## 1. Clean Code et TDD
 
 Code lisible, responsabilités cohérentes, noms explicites, fonctions simples, types stricts, erreurs traitées et dépendances maîtrisées. SOLID et DRY avec discernement : ne pas créer une abstraction pour un besoin imaginaire, ne pas dupliquer une règle métier. Préférer le code pur pour la progression et la fusion, injecter les dépendances réellement nécessaires aux tests (horloge, I/O, transport). Éviter état global mutable, logique métier enfouie dans l'UI et exceptions avalées. Commenter les raisons ou contraintes non évidentes, pas le code trivial.
 
-Pour tout comportement nouveau ou corrigé : écrire un test qui échoue pour la bonne raison (RED), implémenter le minimum (GREEN), refactoriser avec tests verts (REFACTOR). Les tests vérifient des comportements, pas les détails d'implémentation ; tester limites, erreurs et scénarios de régression. TDD pragmatique pour UI visuelle, prototypes jetables, configuration et intégrations natives : une preuve adaptée est acceptable, sans prétendre que du TDD a été réalisé lorsqu'il ne l'a pas été. Les prototypes ne deviennent pas du code de production sans validation.
+Pour tout comportement nouveau ou corrigé : écrire un test qui échoue pour la bonne raison (RED), implémenter le minimum (GREEN), refactoriser avec tests verts (REFACTOR). Les tests vérifient des comportements, pas les détails d'implémentation ; tester limites, erreurs et scénarios de régression. TDD pragmatique pour UI visuelle, prototypes jetables, configuration et intégrations système : une preuve adaptée est acceptable, sans prétendre que du TDD a été réalisé lorsqu'il ne l'a pas été. Les prototypes ne deviennent pas du code de production sans validation.
 
 ## 2. Quality Gates rapides et obligatoires
 
@@ -28,31 +28,31 @@ Mesurer le code effectivement maintenu, y compris les fichiers non importés par
 
 Si une métrique n'est pas disponible à coût raisonnable (par exemple complexité cognitive d'un langage secondaire), documenter la limite, proposer une alternative et demander validation avant d'alléger le contrôle. Ne pas inventer de score, modifier les seuils, masquer des avertissements ou utiliser des exclusions pour passer la gate.
 
-## 3. Outils envisagés (non imposés avant B00)
+## 3. Outillage local validé
 
-| Besoin | Exemple si TypeScript est retenu |
+| Contrôle | Outils et preuve attendue |
 |---|---|
-| Tests et couverture | Vitest + coverage V8/Istanbul |
-| Lint et complexité | ESLint, règles de complexité, SonarJS (plugin local, pas SonarQube) |
-| Typage / format | TypeScript strict, Prettier |
-| Duplication | jscpd |
-| Mutation | StrykerJS |
-| Tests génératifs | fast-check |
-| UI web | Testing Library, Playwright |
-| E2E desktop réel | WebdriverIO / Tauri WebDriver si compatible |
-| E2E Android réel | Appium + UiAutomator2 ou alternative plus simple validée |
-| Rust si retenu | cargo fmt, clippy, cargo test ; couverture/analyse à évaluer |
-| Dépendances | audit du gestionnaire de paquets et outils équivalents par langage |
+| TypeScript | TypeScript strict, Prettier, ESLint et SonarJS local pour les deux complexités, jscpd pour la duplication, Vitest et V8 pour les tests unitaires, d'intégration et la couverture. Inclure les fichiers non importés et vérifier le périmètre critique dès son introduction. Provoquer puis retirer des échecs de test, couverture, seuils et règles. |
+| Dépendances et secrets | Audits des dépendances aux changements et jalons. Gitleaks en local, historique accessible, index, diff suivi et fichiers non suivis candidats. Conserver une sortie expurgée. Les fichiers privés ignorés restent hors de ce contrôle. |
+| Tests ciblés | Mutation et propriétés aux jalons métier pertinents. StrykerJS et fast-check sont des candidats. Ajouter une suite web ou une dépendance UI quand un scénario en a besoin. |
 
-Installer le minimum de dépendances pour satisfaire les contrôles. Préférer les scripts npm/équivalents et éventuellement des wrappers PowerShell pour les actions Windows. Utiliser un lockfile, consigner les prérequis et versions, ne pas installer d'outils globaux lourds sans accord. Une CI distante pourra être discutée ultérieurement ; elle n'est pas requise.
+Pour un contrôle disproportionné, présenter le coût observé, les défauts couverts, l'alternative et le risque résiduel. Documenter les parcours manuels avec versions, étapes et preuve. Toute dérogation durable demande un accord.
+
+Préparer les parcours manuels sur un build éprouvé et les regrouper par checkpoint. Exécuter les régressions automatisées avant le checkpoint pour réserver le temps du propriétaire aux vérifications qui demandent son appareil ou son compte.
+
+### Preuves PWA sur Windows et Android
+
+- Automatiser les parcours web critiques avec Playwright sur le Chrome installé, depuis les ressources de production servies en loopback. Couvrir import, diagnostics, annulation, persistance et relance hors ligne.
+- Compléter sur téléphone Android réel pour l’installation depuis Chrome, le sélecteur de fichier système et son annulation, le tactile, l’arrêt et le redémarrage. Conserver étapes, versions et preuve. Les temps mesurés sur émulateur restent séparés.
+- En B05, revérifier l’installation, une navigation hors ligne et la persistance des données métier après redémarrage sur les deux cibles. Les preuves du témoin B01 figurent dans le backlog. [Navigateurs Playwright](https://playwright.dev/docs/browsers)
 
 ## 4. Pyramide de tests
 
 - **Unitaires** : modèle interne, calculs de progression, navigation, agrégation, overrides manuels, résolution de conflits, validation des ancres, logique de migration. Horloge simulée et données déterministes ; aucun accès réseau.
 - **Intégration** : importateur réel, fichiers temporaires, base locale réelle, transactions, migrations, sync simulée, erreurs d'I/O, panne et reprise. Simuler Drive au niveau transport pour la majorité des tests ; ne pas simuler ce que le test prétend vérifier.
-- **Composants et E2E web** : interaction et rendu responsive, états du sommaire, navigation, accessibilité élémentaire, clavier et tactile. Un viewport mobile ne constitue pas un test Android natif.
-- **E2E Windows** : automatiser l'exécutable ou la fenêtre native réelle, sélection de fichier, import, lecture, redémarrage, persistance et fonctionnement hors ligne. Vérifier les limites de l'outil pour dialogues système ; utiliser des solutions ciblées si besoin.
-- **E2E Android** : au minimum smoke test de build/install/lancement et parcours critique sur émulateur ou téléphone (fichiers, navigation, pause/reprise, hors ligne, stockage). Chercher l'automatisation via émulateur et ADB/Appium si raisonnable. Tester également un appareil réel pour fluidité/stockage si disponible. Si un scénario natif est trop coûteux à automatiser, proposer un test manuel reproductible et explicite ; accord du propriétaire requis pour déroger durablement.
+- **Composants et E2E web** : interaction et rendu responsive, états du sommaire, navigation, accessibilité élémentaire, clavier et tactile. Un viewport mobile vérifie uniquement le rendu et les interactions simulées.
+- **E2E Windows** : Playwright sur Chrome. Compléter sur l’application installée pour les interactions système, le redémarrage et le hors-ligne.
+- **E2E Android** : tests web reproductibles et validations du vrai sélecteur, du cycle de vie et du stockage sur téléphone. Automatiser sur appareil lorsque l’environnement le permet.
 - **Drive réel** : tests ciblés OAuth, transfert, deux appareils, conflits et reconnexion, via compte/dossier de test autorisé. Pas de dépendance réseau ni d'identifiants réels dans la suite rapide. Ne pas confondre un test simulé et une validation du service réel.
 
 Les agents doivent pouvoir exécuter les scripts eux-mêmes une fois les prérequis présents, récupérer code de sortie, logs et, pour UI, captures/traces sur échec. Protéger les données privées dans les traces. Ne pas utiliser le compte personnel du propriétaire pour des tests destructifs.
@@ -71,6 +71,8 @@ Tester notamment l'idempotence de la synchronisation, l'absence de pertes de pas
 
 Fixtures synthétiques versionnées : Markdown simple, enrichi, hiérarchie inhabituelle, notes, images intégrées, tableaux, ancres et caractères chinois. Vérifier le texte normalisé, l'ordre, les images/empreintes, les références et destinations, les diagnostics et la sécurité. Comparer un modèle canonique ou HTML normalisé, pas des snapshots géants et fragiles. Réimporter deux éditions pour vérifier les correspondances et les cas ambigus. Les vrais DDJ restent locaux ; comparer un extrait et mesurer l'ouvrage de 80 Mo. Aucune différence éditoriale non expliquée ne doit être acceptée.
 
+L'inventaire B00 justifie des cas combinant attributs de titres de type Pandoc, appels et retours de notes en HTML, `details`/`summary`, tableaux Markdown et HTML et images WebP/PNG/JPEG. Vérifier qu'un renvoi traverse les fragments et revient au point d'appel après assainissement. Tester les payloads d'image identiques et les limites de décodage avec des données synthétiques.
+
 ## 6. Scénarios de validation de référence
 
 | ID | Scénario et résultat attendu |
@@ -88,11 +90,13 @@ Fixtures synthétiques versionnées : Markdown simple, enrichi, hiérarchie inha
 | Q11 | Nouvelle édition : conservation des unités inchangées ; unités modifiées ou ambiguës signalées |
 | Q12 | Markdown hostile, URL dangereuse, chemin invalide, permissions insuffisantes : pas d'exécution ni accès non prévu |
 | Q13 | Changement de compte, restauration/ export : données isolées, progression récupérable selon la politique retenue |
-| Q14 | Windows et Android natifs : build, lancement et parcours critique, captures/logs en cas d'échec |
+| Q14 | PWA Windows et Android : build, lancement depuis l’icône, parcours hors ligne et persistance après redémarrage |
 
 ## 7. Performances
 
 Objectifs initiaux à mesurer sur appareil de référence (PC Windows et téléphone Android ; émulateur pour fonctionnel, pas pour extrapoler les performances réelles) : démarrage ≤ 2 s, ouverture d'un ouvrage local ≤ 2 s, navigation entre sections locales ≤ 300 ms, enregistrement local de progression ≤ 100 ms, défilement fluide (cible 60 FPS si matériel adapté). Ce sont des objectifs de prototype, pas des gates bloquantes avant établissement d'une baseline. Définir le protocole, les versions, cas froid/chaud, taille des fichiers, médiane/dispersion et mémoire maximale. Mesurer l'import du Markdown de 80 Mo et le pic mémoire avant de fixer des budgets. Détecter les régressions au fil des jalons. Ne pas sur-optimiser en l'absence de mesure.
+
+**Protocole B02.** Mesurer lecture, parsing, extraction et écriture sur extrait puis sur l’ouvrage de 83,16 Mo. Consigner pic de mémoire observé et méthode d’échantillonnage, volume importé et gain de déduplication. Mesurer l’accès au catalogue, au fragment et à ses ressources, et la réactivité du fil UI. Relever les processus Chrome concernés sur Windows et, si l’accès le permet, leur mémoire sur téléphone Android réel. Consigner les conditions et limites de chaque mesure. Répéter les tests d’ouverture/navigation en B03.
 
 ## 8. Definition of Done
 

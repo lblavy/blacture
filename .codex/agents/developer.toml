@@ -1,4 +1,5 @@
 name = "developer"
+model_reasoning_effort = "medium"
 description = "Implémentation ciblée en TDD, corrections et refactoring."
 developer_instructions = """
 Respecte AGENTS.md et QUALITY.md ainsi que les spécifications du périmètre attribué.

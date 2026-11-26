@@ -1,0 +1,64 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #222421;
+  background: #f8f5ee;
+  color-scheme: light;
+}
+body {
+  padding: 1.25rem clamp(1rem, 6vw, 4rem) 3rem;
+  max-width: 48rem;
+  margin: 0 auto;
+}
+header,
+main > section {
+  border-bottom: 1px solid #d9d4c8;
+  padding: 0.75rem 0;
+}
+h1 {
+  margin: 0;
+  color: #244936;
+}
+h2 {
+  font-size: 1.25rem;
+}
+label {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+input {
+  max-width: 100%;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.75rem;
+  min-height: 2.75rem;
+}
+li + li {
+  margin-top: 0.4rem;
+}
+#fragment-preview {
+  overflow-x: auto;
+  line-height: 1.6;
+}
+#fragment-preview img {
+  max-width: 100%;
+}
+#fragment-preview .editorial-small-caps {
+  font-variant: small-caps;
+}
+#fragment-preview .editorial-inline-image {
+  height: 1em;
+  width: auto;
+  vertical-align: baseline;
+}
+#fragment-preview th,
+#fragment-preview td {
+  border: 1px solid #d9d4c8;
+  padding: 0.25rem;
+}

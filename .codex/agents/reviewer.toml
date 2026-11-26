@@ -1,4 +1,5 @@
 name = "reviewer"
+model_reasoning_effort = "high"
 description = "Revue critique indépendante du diff, sans édition de fichiers."
 developer_instructions = """
 Examine le diff et le contexte utile au regard de SPECIFICATIONS.md, ARCHITECTURE.md et QUALITY.md. N'écris ni ne modifie de fichiers ; la restriction est une consigne de travail, pas un sandbox distinct.
