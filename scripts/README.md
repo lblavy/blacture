@@ -6,7 +6,7 @@ Depuis la racine, installer les dépendances verrouillées avec `npm ci`. Utilis
 |---|---|
 | `npm run quality` | Typage, lint, complexités, formatage, couverture et duplication TypeScript/HTML/CSS. |
 | `npm test` | Tests Vitest sans seuil de couverture. |
-| `npm run test:e2e` | Build puis parcours Playwright dans Chrome sur une origine loopback isolée. |
+| `npm run test:e2e` | Build puis parcours Playwright Chrome pour l’import, le lecteur et la réouverture hors ligne, sur des origines loopback isolées. |
 | `npm run quality:audit` | Audit des dépendances npm. |
 | `pwsh -NoProfile -File scripts/scan-secrets.ps1` | Gitleaks sur l’historique accessible, l’index, le diff suivi et les fichiers non suivis non ignorés. |
 

@@ -223,15 +223,23 @@ Le plus gros ouvrage a produit 10 905 fragments et 134 842 destinations lors de 
 **Essai Android sur téléphone réel.** Aucun téléphone n’était connecté au contrôle ADB. Le propriétaire a publié `work/b02-validation/deploy/blacture-b02-android-v1.zip` (130 578 octets, fichiers applicatifs et exemple synthétique) et choisi de garder B02 sur `https://blacture.blavy.eu/` pour les essais. Le contrôle public a retrouvé le bundle B02 et confirmé que le fichier téléchargeable `exemple-b02.md` a la même empreinte SHA-256 que la fixture. Le propriétaire confirme que le sélecteur système s’ouvre et que le bouton Retour ramène à l’écran d’import sans ajouter d’ouvrage. Après sélection de `exemple-b02.md` dans Téléchargements, il confirme l’importation, l’ajout au catalogue et l’ouverture de l’aperçu de la préface. Il confirme ensuite l’import hors ligne de l’ouvrage réel de 5,73 Mo en quelques secondes et l’ouverture de son aperçu. Ce relevé est une estimation du propriétaire, sans chronométrage ni mesure mémoire. Le plus gros ouvrage reste à tester sur ce téléphone.
 
 ## B03 — Bibliothèque et lecteur local (F01/F04/F05/F10, Q01/Q06/Q07)
-**Statut : Démarrage autorisé par le propriétaire.**
+**Statut : Terminé et validé par le propriétaire.** Contrôles Windows et viewport tactile automatisés. Le propriétaire reporte la vérification du confort sur téléphone Android réel au prochain checkpoint groupé. Effort M, complexité moyenne, risque moyen.
 
 - Bibliothèque, choix d'ouvrage, sommaire dynamique, affichage HTML responsive par fragment, notes et renvois, retour navigation, taille du texte.
 - Persistance locale et lecture sans compte/réseau ; gérer documents absents et états d'erreur. Tester confort sur Windows et Android avec un vrai ouvrage et une structure différente.
 
 **Acceptation :** importer, ouvrir, naviguer, consulter notes/images/tableaux et relancer sans réseau ; rendu et fluidité mesurés. Pas de dépendance cloud.
 
+**Mesures sur corpus privé en lecture seule.** Chrome 158 sous Windows, sur profil isolé. Avec l’ouvrage de 83,16 Mo déjà importé, la bibliothèque est visible après 78 ms dans un nouvel onglet hors ligne. Le premier fragment est inséré en 198 ms après le clic, avec rendu estimé à 245 ms et une tâche longue de 158 ms. Le sommaire de 10 903 sections monte quatre entrées racines avant dépliage. Un accès à six niveaux de profondeur prend 64 ms jusqu’au rendu estimé. Un fragment comportant du chinois, un tableau et deux images est rendu en 96 ms, après une lecture de fragment et deux lectures de ressources. Sur viewport Chrome de 390 px, le défilement donne un intervalle de rendu p95 de 17 ms, sans débordement horizontal de la page. Ces mesures restent propres au PC. Journaux agrégés dans `work/b03-bench/`.
+
+**Compatibilité B02.** La QA a servi le build B02 et le build B03 à la même origine loopback dans Chrome. Après import d’un ouvrage synthétique sous B02 et activation de la mise à jour Service Worker, le catalogue et les fragments sont accessibles sous B03 et la base passe de v1 à v2. Le fragment s’ouvre de nouveau depuis un onglet hors ligne. Le même passage de schéma est couvert par un test automatisé versionné.
+
+**Vérifications navigateur.** `npm.cmd run test:e2e` passe avec 11 scénarios sur Chrome Windows 158. Les nouveaux couvrent le sommaire hiérarchique, les deux sens de navigation, le retour exact à l’appel d’une note, la lecture des seules ressources du fragment, la taille du texte conservée, la réouverture hors ligne à 390 px et la récupération après fragment absent. Les contre-tests vérifient le dépilage du retour éditorial et la visibilité du titre lorsque la barre d’outils est fixe. Sur un ouvrage réel de 5,73 Mo, dix allers-retours de notes retrouvent exactement la cible et l’appel. Les journaux synthétiques de la version finale sont dans `work/b03-qa-proof/`.
+
+**Qualité et contre-revue.** `npm.cmd run quality` passe avec 108 tests, 97,65 % des lignes, 89,63 % des branches et zéro clone. Audit npm et scan Gitleaks sans signalement. La contre-revue indépendante confirme le retour éditorial exact, le maintien du retour sur renvoi indisponible et le titre focalisé visible sous la barre d’outils dans Chrome de 320 à 1 280 px. Les mesures de confort et de rendu sur le téléphone réel sont à grouper au prochain checkpoint manuel.
+
 ## B04 — Progression automatique et manuelle (F06–F09, Q02–Q07)
-**Statut : À faire ; dépend de B03.**
+**Statut : Démarrage autorisé par le propriétaire.** Les essais sur téléphone sont réservés au prochain checkpoint groupé.
 
 - Arbitrer granularité, visibilité, seuils (8 s et 95 % expérimentaux), contenu pertinent, agrégation et propagation manuelle. Prototyper avant de figer. Écrire tests déterministes et cas limites.
 - Implémenter suivi partiel, états, pourcentages, corrections manuelles persistantes et retour au mode auto ; deux actions de reprise séparées.

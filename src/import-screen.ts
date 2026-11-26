@@ -1,7 +1,6 @@
-import { createFragmentPreview } from "./fragment-preview";
 import type { ImportedBook, ImportStage } from "./import";
 import { runImport } from "./import-job";
-import { listBooks, saveEdition } from "./storage";
+import { listBooks, saveEdition, type CatalogEntry } from "./storage";
 
 interface ImportControls {
   form: HTMLFormElement;
@@ -11,7 +10,7 @@ interface ImportControls {
   status: HTMLElement;
   diagnostics: HTMLElement;
   catalog: HTMLElement;
-  preview: HTMLElement;
+  empty: HTMLElement;
 }
 
 const stageText: Record<ImportStage, string> = {
@@ -49,29 +48,27 @@ function showDiagnostics(
 
 export function startImportScreen(
   controls: ImportControls,
-  services = { runImport, listBooks, saveEdition, createFragmentPreview },
+  openBook: (entry: CatalogEntry) => Promise<void>,
+  services = { runImport, listBooks, saveEdition },
 ) {
-  const { form, file, submit, cancel, status, diagnostics, catalog } = controls;
-  const preview = services.createFragmentPreview(controls.preview);
+  const { form, file, submit, cancel, status, diagnostics, catalog, empty } =
+    controls;
   let active: AbortController | undefined;
 
   async function refreshCatalog() {
     const start = performance.now();
     const entries = await services.listBooks();
     catalog.replaceChildren();
+    empty.hidden = entries.length > 0;
     for (const entry of entries) {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = entry.title;
       button.addEventListener("click", () => {
-        const start = performance.now();
-        void preview.open(entry).then(
-          () => performance.measure("fragment-open", { start }),
-          () => {
-            status.textContent = "Impossible de lire le premier fragment.";
-          },
-        );
+        void openBook(entry).catch(() => {
+          status.textContent = "Impossible d’ouvrir cet ouvrage.";
+        });
       });
       item.append(button);
       catalog.append(item);

@@ -76,6 +76,12 @@ L'approche de B00 est validée. Confirmer la fidélité sur des extraits représ
 - Le banc B02 Windows confirme un accès local rapide sous le volume de l’ouvrage de 83,16 Mo. Sur un même fragment avec ses deux images, la médiane de lecture à chaud est de 2,15 ms pour IndexedDB et 3,80 ms pour OPFS. Cette mesure est propre à cet échantillon Windows. IndexedDB permet une seule transaction de publication. Le coût dominant du gros import est l’analyse du Markdown. Le résultat doit encore être confronté à la mémoire du téléphone réel. [Mesures B02](BACKLOG.md#b02--importateur-et-modèle-interne-f01f03-q01q11q12)
 - Enregistrer toute future modification de lecture et son état de synchronisation dans une transaction locale. Tester l’arrêt brutal. La persistance accordée par le navigateur réduit le risque d’éviction. La sauvegarde, l’export et la restauration sont traités en B07.
 
+## Lecteur local
+
+Le lecteur charge le manifeste à l’ouverture de l’ouvrage, puis le seul fragment demandé et ses ressources. Le sommaire déplie les branches à la demande et conserve l’accès au contenu propre des sections parentes. Le fragment et la destination du renvoi figurent dans le hash local de navigation. Les retours aux appels s’appuient sur l’historique du navigateur. Cette navigation ne constitue pas un suivi de progression.
+
+La mise à jour de la base IndexedDB de B02 ajoute un magasin de préférences en version 2. Les magasins et enregistrements de catalogue, de manifestes, de fragments et de ressources sont conservés. Le Service Worker sert le shell hors ligne. La préférence de taille du texte et le contenu restent disponibles localement.
+
 ## Synchronisation Google Drive
 
 **Orientation validée.** Un client Web Google Identity Services commun aux deux plateformes utilise le modèle de jeton, OAuth External et le seul scope `drive.file`. Le jeton de courte durée reste en mémoire. L’application peut demander un geste pour reprendre la synchronisation après expiration ou relance, limitation acceptée pour V1. La lecture et les écritures locales continuent pendant cette indisponibilité. Le statut local et le statut de synchronisation sont visibles. B01a a vérifié les échanges du témoin dans les deux sens. En B06, éprouver le transfert des éditions et la fusion. [Modèle de jeton GIS](https://developers.google.com/identity/oauth2/web/guides/use-token-model), [scopes Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).

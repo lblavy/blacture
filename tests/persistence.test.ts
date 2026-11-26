@@ -1,13 +1,15 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportedBook } from "../src/import";
-import { createFragmentPreview } from "../src/fragment-preview";
+import { createFragmentRenderer } from "../src/fragment-preview";
 import {
   listBooks,
+  readFontSize,
   readFragment,
   readManifest,
   readResources,
   saveEdition,
+  saveFontSize,
 } from "../src/storage";
 
 function book(id = "edition-1"): ImportedBook {
@@ -52,6 +54,46 @@ async function resetDatabase() {
 
 describe("publication atomique d’une édition", () => {
   beforeEach(resetDatabase);
+
+  it("ajoute les préférences en v2 sans altérer une édition écrite par B02", async () => {
+    const source = book();
+    const key = JSON.stringify([source.workId, source.editionId]);
+    const { fragments, resources, ...manifest } = source;
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open("blacture-library", 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore("catalog").add(
+          {
+            key,
+            title: source.title,
+            firstFragmentId: "first",
+            resourceBytes: 3,
+          },
+          key,
+        );
+        db.createObjectStore("manifests").add(manifest, key);
+        db.createObjectStore("fragments").add(fragments[0], [key, "first"]);
+        db.createObjectStore("resources").add(resources[0], [key, "image"]);
+      };
+      request.onsuccess = () => {
+        request.result.close();
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+    expect(await readFontSize()).toBe("medium");
+    await saveFontSize("large");
+    expect(await readFontSize()).toBe("large");
+    expect(await listBooks()).toMatchObject([{ key, title: source.title }]);
+    expect(await readManifest(key)).toEqual(manifest);
+    expect(await readFragment(key, "first")).toEqual(fragments[0]);
+    const [resource] = await readResources(key, ["image"]);
+    expect(resource).toMatchObject({ id: "image", mimeType: "image/png" });
+    expect(Array.from(resource!.bytes)).toEqual(
+      Array.from(resources[0]!.bytes),
+    );
+  });
 
   it("retrouve le catalogue, le manifeste, un fragment et ses ressources après réouverture", async () => {
     const source = book();
@@ -139,7 +181,7 @@ describe("publication atomique d’une édition", () => {
       '<p>Un texte.</p><img data-resource-id="image" alt="Carte">';
     const entry = await saveEdition(source);
     const container = document.createElement("article");
-    const preview = createFragmentPreview(container);
+    const preview = createFragmentRenderer(container);
     const create = vi.fn().mockReturnValue("blob:resource");
     const revoke = vi.fn();
     class TestUrl extends URL {
@@ -148,17 +190,17 @@ describe("publication atomique d’une édition", () => {
     }
     vi.stubGlobal("URL", TestUrl);
     try {
-      await preview.open(entry);
+      await preview.open(entry.key, entry.firstFragmentId);
       expect(container.querySelector("img")?.src).toBe("blob:resource");
       expect(container.textContent).toBe("Un texte.");
       container.querySelector("img")?.dispatchEvent(new Event("error"));
       expect(container.textContent).toContain("Image indisponible · Carte");
-      await preview.open({ ...entry, firstFragmentId: undefined });
+      await preview.open(entry.key, undefined);
       expect(revoke).toHaveBeenCalledWith("blob:resource");
       expect(container.textContent).toBe("");
-      await expect(
-        preview.open({ ...entry, firstFragmentId: "missing" }),
-      ).rejects.toThrow("Fragment introuvable");
+      await expect(preview.open(entry.key, "missing")).rejects.toThrow(
+        "Fragment introuvable",
+      );
     } finally {
       vi.unstubAllGlobals();
     }
@@ -172,7 +214,7 @@ describe("publication atomique d’une édition", () => {
     const first = await saveEdition(source);
     const second = await saveEdition(book("édition suivante"));
     const container = document.createElement("article");
-    const preview = createFragmentPreview(container);
+    const preview = createFragmentRenderer(container);
     const create = vi.fn().mockReturnValue("blob:resource");
     class TestUrl extends URL {
       static createObjectURL = create;
@@ -180,10 +222,13 @@ describe("publication atomique d’une édition", () => {
     }
     vi.stubGlobal("URL", TestUrl);
     try {
-      await preview.open(first);
+      await preview.open(first.key, first.firstFragmentId);
       expect(container.textContent).toContain("Image indisponible.");
       expect(create).not.toHaveBeenCalled();
-      await Promise.all([preview.open(first), preview.open(second)]);
+      await Promise.all([
+        preview.open(first.key, first.firstFragmentId),
+        preview.open(second.key, second.firstFragmentId),
+      ]);
       expect(container.textContent).toBe("Texte.");
     } finally {
       vi.unstubAllGlobals();

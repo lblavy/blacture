@@ -12,7 +12,7 @@
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e": "npm run build && node --test tests/e2e/import.spec.ts",
+    "test:e2e": "npm run build && node --test tests/e2e/*.spec.ts",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint --max-warnings 0 src tests eslint.config.mjs vite.config.ts",

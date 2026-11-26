@@ -9,37 +9,82 @@
     <link rel="icon" href="./icon-192.png" />
   </head>
   <body>
-    <header>
+    <header class="site-header">
       <h1>Blacture</h1>
-      <p id="offline-status" role="status"></p>
-      <button type="button" id="update" hidden>Mettre à jour</button>
+      <div class="site-status">
+        <p id="offline-status" role="status"></p>
+        <button type="button" id="update" hidden>Mettre à jour</button>
+      </div>
     </header>
     <main>
-      <section>
-        <h2>Importer un ouvrage</h2>
-        <form id="import-form">
-          <label for="markdown-file">Fichier Markdown</label>
-          <input
-            type="file"
-            id="markdown-file"
-            accept=".md,.markdown,text/markdown"
-            required
-          />
-          <div class="actions">
-            <button id="import-submit">Importer</button>
-            <button type="button" id="import-cancel" hidden>Annuler</button>
-          </div>
-        </form>
-        <p id="import-status" role="status"></p>
-        <ul id="import-diagnostics" hidden></ul>
+      <section id="library" class="library" aria-labelledby="library-title">
+        <div class="library-catalog">
+          <h2 id="library-title">Bibliothèque</h2>
+          <p id="catalog-empty" hidden>Aucun ouvrage importé.</p>
+          <ul id="catalog"></ul>
+        </div>
+        <section class="library-import" aria-labelledby="import-title">
+          <h2 id="import-title">Importer un ouvrage</h2>
+          <form id="import-form">
+            <label for="markdown-file">Fichier Markdown</label>
+            <input
+              type="file"
+              id="markdown-file"
+              accept=".md,.markdown,text/markdown"
+              required
+            />
+            <div class="actions">
+              <button type="submit" id="import-submit">Importer</button>
+              <button type="button" id="import-cancel" hidden>Annuler</button>
+            </div>
+          </form>
+          <p id="import-status" role="status"></p>
+          <ul id="import-diagnostics" hidden></ul>
+        </section>
       </section>
-      <section>
-        <h2>Ouvrages importés</h2>
-        <ul id="catalog"></ul>
-        <article
-          id="fragment-preview"
-          aria-label="Aperçu du premier fragment"
-        ></article>
+      <section id="reader" class="reader" aria-labelledby="reader-title" hidden>
+        <div class="reader-toolbar">
+          <button type="button" id="reader-back">
+            Retour à la bibliothèque
+          </button>
+          <button type="button" id="reader-return" hidden>
+            Retour au passage
+          </button>
+          <div class="reader-size">
+            <label for="reader-font-size">Taille du texte</label>
+            <select id="reader-font-size">
+              <option value="small">Petite</option>
+              <option value="medium" selected>Moyenne</option>
+              <option value="large">Grande</option>
+            </select>
+          </div>
+        </div>
+        <h2 id="reader-title" tabindex="-1"></h2>
+        <div class="reader-layout">
+          <details id="reader-toc-panel" class="reader-outline">
+            <summary>Sommaire</summary>
+            <nav id="reader-toc" aria-label="Sommaire de l’ouvrage"></nav>
+          </details>
+          <div class="reader-sheet">
+            <p id="reader-status" role="status"></p>
+            <article
+              id="fragment-preview"
+              aria-label="Contenu de l’ouvrage"
+              tabindex="-1"
+            ></article>
+            <nav
+              class="fragment-actions"
+              aria-label="Navigation entre fragments"
+            >
+              <button type="button" id="reader-previous" disabled>
+                Fragment précédent
+              </button>
+              <button type="button" id="reader-next" disabled>
+                Fragment suivant
+              </button>
+            </nav>
+          </div>
+        </div>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

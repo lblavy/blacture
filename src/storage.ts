@@ -11,15 +11,19 @@ export interface CatalogEntry {
   resourceBytes: number;
 }
 
-type Manifest = Omit<ImportedBook, "fragments" | "resources">;
+export type Manifest = Omit<ImportedBook, "fragments" | "resources">;
+export type FontSize = "small" | "medium" | "large";
 
 const stores = ["catalog", "manifests", "fragments", "resources"];
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("blacture-library", 1);
-    request.onupgradeneeded = () => {
-      for (const store of stores) request.result.createObjectStore(store);
+    const request = indexedDB.open("blacture-library", 2);
+    request.onupgradeneeded = ({ oldVersion }) => {
+      if (oldVersion === 0) {
+        for (const store of stores) request.result.createObjectStore(store);
+      }
+      request.result.createObjectStore("preferences");
     };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -119,11 +123,17 @@ export async function saveEdition(
 function read<T>(
   store: string,
   request: (store: IDBObjectStore) => IDBRequest<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
-  return transact([store], "readonly", (tx, capture) => {
-    const result = request(tx.objectStore(store));
-    result.onsuccess = () => capture(result.result);
-  });
+  return transact(
+    [store],
+    "readonly",
+    (tx, capture) => {
+      const result = request(tx.objectStore(store));
+      result.onsuccess = () => capture(result.result);
+    },
+    signal,
+  );
 }
 
 export function listBooks(): Promise<CatalogEntry[]> {
@@ -133,27 +143,55 @@ export function listBooks(): Promise<CatalogEntry[]> {
 export function readFragment(
   key: string,
   id: string,
+  signal?: AbortSignal,
 ): Promise<ImportedFragment | undefined> {
-  return read("fragments", (store) => store.get([key, id]));
+  return read("fragments", (store) => store.get([key, id]), signal);
 }
 
-export function readManifest(key: string): Promise<Manifest | undefined> {
-  return read("manifests", (store) => store.get(key));
+export function readManifest(
+  key: string,
+  signal?: AbortSignal,
+): Promise<Manifest | undefined> {
+  return read("manifests", (store) => store.get(key), signal);
 }
 
 export function readResources(
   key: string,
   ids: string[],
+  signal?: AbortSignal,
 ): Promise<ImportedResource[]> {
-  return transact(["resources"], "readonly", (tx, capture) => {
-    const store = tx.objectStore("resources");
-    const resources: ImportedResource[] = [];
-    capture(resources);
-    for (const id of ids) {
-      const request = store.get([key, id]);
-      request.onsuccess = () => {
-        if (request.result) resources.push(request.result as ImportedResource);
-      };
-    }
+  return transact(
+    ["resources"],
+    "readonly",
+    (tx, capture) => {
+      const store = tx.objectStore("resources");
+      const resources: ImportedResource[] = [];
+      capture(resources);
+      for (const id of ids) {
+        const request = store.get([key, id]);
+        request.onsuccess = () => {
+          if (request.result)
+            resources.push(request.result as ImportedResource);
+        };
+      }
+    },
+    signal,
+  );
+}
+
+export function isFontSize(value: unknown): value is FontSize {
+  return value === "small" || value === "medium" || value === "large";
+}
+
+export async function readFontSize(): Promise<FontSize> {
+  const value: unknown = await read("preferences", (store) =>
+    store.get("font-size"),
+  );
+  return isFontSize(value) ? value : "medium";
+}
+
+export function saveFontSize(size: FontSize): Promise<void> {
+  return transact(["preferences"], "readwrite", (tx) => {
+    tx.objectStore("preferences").put(size, "font-size");
   });
 }
