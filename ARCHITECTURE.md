@@ -82,6 +82,8 @@ Le lecteur charge le manifeste à l’ouverture de l’ouvrage, puis le seul fra
 
 La mise à jour de la base IndexedDB de B02 ajoute un magasin de préférences en version 2. Les magasins et enregistrements de catalogue, de manifestes, de fragments et de ressources sont conservés. Le Service Worker sert le shell hors ligne. La préférence de taille du texte et le contenu restent disponibles localement.
 
+B04 ajoute deux magasins en version 3, pour les index de progression par édition et les états de lecture. Le premier accès examine les fragments JSON existants un par un, sans charger leurs binaires, et met en cache les identifiants et poids des blocs pertinents. La lecture du fragment demandé peut commencer pendant la préparation de cet index. Les écritures relisent l’état courant et mettent à jour la progression et le résumé du catalogue dans la même transaction. Les observations, corrections et positions restent distinctes.
+
 ## Synchronisation Google Drive
 
 **Orientation validée.** Un client Web Google Identity Services commun aux deux plateformes utilise le modèle de jeton, OAuth External et le seul scope `drive.file`. Le jeton de courte durée reste en mémoire. L’application peut demander un geste pour reprendre la synchronisation après expiration ou relance, limitation acceptée pour V1. La lecture et les écritures locales continuent pendant cette indisponibilité. Le statut local et le statut de synchronisation sont visibles. B01a a vérifié les échanges du témoin dans les deux sens. En B06, éprouver le transfert des éditions et la fusion. [Modèle de jeton GIS](https://developers.google.com/identity/oauth2/web/guides/use-token-model), [scopes Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).

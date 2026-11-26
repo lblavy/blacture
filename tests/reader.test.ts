@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportedBook } from "../src/import";
 import { startReader } from "../src/reader";
+import * as storage from "../src/storage";
 import { readFontSize, saveEdition, saveFontSize } from "../src/storage";
 
 function makeControls() {
@@ -19,6 +20,15 @@ function makeControls() {
   const returnToLibrary = document.createElement("button");
   const returnToReference = document.createElement("button");
   const status = document.createElement("output");
+  const progress = {
+    contents,
+    toolbar: document.createElement("header"),
+    bookState: document.createElement("output"),
+    sectionState: document.createElement("output"),
+    bookMode: document.createElement("select"),
+    sectionMode: document.createElement("select"),
+    error: document.createElement("output"),
+  };
   outlinePanel.append(outline);
   panel.append(
     heading,
@@ -30,6 +40,7 @@ function makeControls() {
     returnToLibrary,
     returnToReference,
     status,
+    ...Object.values(progress).filter((element) => element !== contents),
   );
   document.body.append(library, panel);
   return {
@@ -45,6 +56,7 @@ function makeControls() {
     returnToLibrary,
     returnToReference,
     status,
+    progress,
   };
 }
 
@@ -150,6 +162,34 @@ describe("lecteur local", () => {
     reader?.dispose();
     document.body.replaceChildren();
     vi.unstubAllGlobals();
+  });
+
+  it("does not replace a newer reading choice when an earlier resume finishes late", async () => {
+    stubBlobUrls();
+    const older = await saveEdition(sample("Ancien ouvrage"));
+    const newer = await saveEdition(sample("Nouvel ouvrage"));
+    const controls = makeControls();
+    reader = startReader(controls);
+    type State = Awaited<ReturnType<typeof storage.readProgress>>;
+    let finishReading!: (state: State) => void;
+    const pending = new Promise<State>((resolve) => {
+      finishReading = resolve;
+    });
+    const read = vi.spyOn(storage, "readProgress").mockReturnValueOnce(pending);
+    try {
+      const obsolete = reader.resume(older, "last");
+      await vi.waitFor(() => expect(read.mock.calls[0]?.[0]).toBe(older.key));
+      await reader.open(newer);
+      finishReading({
+        observations: {},
+        modes: {},
+        last: { fragmentId: "parent-a" },
+      });
+      await obsolete;
+      expect(controls.heading.textContent).toBe(newer.title);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("charge un fragment, affiche le sommaire paresseusement et suit l’ordre canonique", async () => {

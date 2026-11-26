@@ -239,7 +239,7 @@ Le plus gros ouvrage a produit 10 905 fragments et 134 842 destinations lors de 
 **Qualité et contre-revue.** `npm.cmd run quality` passe avec 108 tests, 97,65 % des lignes, 89,63 % des branches et zéro clone. Audit npm et scan Gitleaks sans signalement. La contre-revue indépendante confirme le retour éditorial exact, le maintien du retour sur renvoi indisponible et le titre focalisé visible sous la barre d’outils dans Chrome de 320 à 1 280 px. Les mesures de confort et de rendu sur le téléphone réel sont à grouper au prochain checkpoint manuel.
 
 ## B04 — Progression automatique et manuelle (F06–F09, Q02–Q07)
-**Statut : Démarrage autorisé par le propriétaire.** Les essais sur téléphone sont réservés au prochain checkpoint groupé.
+**Statut : Terminé et validé par le propriétaire.** Les seuils restent expérimentaux et les essais sur téléphone sont réservés au prochain checkpoint groupé. Effort L, complexité et risque élevés.
 
 - Arbitrer granularité, visibilité, seuils (8 s et 95 % expérimentaux), contenu pertinent, agrégation et propagation manuelle. Prototyper avant de figer. Écrire tests déterministes et cas limites.
 - Implémenter suivi partiel, états, pourcentages, corrections manuelles persistantes et retour au mode auto ; deux actions de reprise séparées.
@@ -247,8 +247,20 @@ Le plus gros ouvrage a produit 10 905 fragments et 134 842 destinations lors de 
 
 **Acceptation :** scénario 7/30 reproduit en E2E ; lecture partielle et états parents exacts selon règles convenues ; une dévalidation ne se recochera pas immédiatement ; couverture critique conforme. Mutation/property testing ciblés si validés.
 
+**Règles expérimentales soumises au checkpoint.** La dernière consultation mémorise le fragment et, lorsqu’il est disponible, le bloc visible ou l’ancre. La reprise de progression vise le premier bloc non lu dans l’ordre de l’ouvrage. L’observateur examine un seul bloc par seconde, choisi près du centre de la zone utile. Il demande au moins la moitié de la zone pertinente visible, cumule 8 s stables et demande la couverture de quatre bandes pour un bloc plus haut que l’écran. Le défilement, la perte de focus, le masquage, la veille et le repli d’un détail interrompent l’observation. Un bloc contenant du texte pertinent replié attend son ouverture. Les notes déjà écartées de l’index n’empêchent pas le suivi du texte visible.
+
+Le poids dépend de la quantité de texte utile et une image seule reçoit un poids fixe. L’index écarte les titres, les sommaires identifiables (`nav`, `data-toc`, rôles éditoriaux admis) et les notes explicitement balisées. Les marqueurs conservés servent pour les anciennes éditions. Un rôle supprimé par l’ancien importateur ne peut pas être reconstitué depuis le fragment. Le seuil de 95 % s’applique au contenu propre d’une section. Une section parente ou l’ouvrage se termine quand son contenu propre et tous ses descendants pertinents sont terminés.
+
+**Corrections manuelles.** Le mode Automatique, Lu ou Non lu s’applique au sous-arbre lors d’un changement de mode. Une correction d’enfant effectuée ensuite constitue une exception. Les corrections conservent les observations automatiques et le retour à Automatique les réutilise. Un sélecteur affichant déjà le mode voulu n’émet pas de nouvelle commande. Une exception peut être corrigée directement sur la section concernée.
+
+**Mesures Windows.** Chrome 158 en boucle locale hors ligne, relevés ponctuels sur corpus réel en lecture seule avant les derniers correctifs de revue. L’index se prépare derrière la lecture au premier accès puis reste en cache par édition. Le rendu estimé du premier fragment et la disponibilité du suivi sont à 80 ms et 536 ms pour 5,73 Mo, puis le suivi est prêt à 67 ms avec cache. Pour 83,16 Mo, ils sont à 394 ms et 6,09 s, puis le suivi est prêt à 421 ms avec cache. Le premier balayage de ce grand ouvrage prend 5,57 s. La plus longue interruption de rendu mesurée à l’ouverture est d’environ 296 ms. Les corrections manuelles observées sur le grand volume s’enregistrent en 4,7 à 21,5 ms. Le premier accès au grand ouvrage et le confort de progression sur téléphone restent à mesurer au checkpoint. Preuves agrégées dans `work/b04-bench/`.
+
+**Contrôles navigateur.** Sur Chrome Windows, `npm.cmd run test:e2e` passe 14 scénarios, dont 3 B04. Ils vérifient les reprises aux chapitres 7 et 30 avec une reprise à l’intérieur du chapitre 30, le cumul au premier plan, l’interruption en arrière-plan, la couverture des blocs longs, les corrections par branche, le retour en automatique, la taille du texte et la relance hors ligne. La mise à jour locale réelle B03 → B04 conserve un livre importé, le fragment courant et la taille du texte. Elle migre IndexedDB de v2 à v3 et conserve ensuite une correction enregistrée après réouverture hors ligne. Les preuves sont dans `work/b04-qa-proof/`.
+
+**Qualité et contre-revue.** `npm.cmd run quality` passe avec 143 tests, 96,45 % des lignes, 88,09 % des branches et zéro clone. Le domaine de progression atteint 100 % des lignes. Gitleaks ne signale aucun secret. La contre-revue a confirmé l’exclusion des sommaires et notes identifiables, la correction du crédit des détails repliés et l’annulation d’une reprise devenue obsolète. Le contrôle Android réel reste regroupé au prochain checkpoint.
+
 ## B05 — Applications installables et hors ligne (F10, Q07/Q10/Q14)
-**Statut : À faire après B03/B04.**
+**Statut : Démarrage autorisé par le propriétaire.** La validation sur les appareils est prévue au prochain checkpoint groupé.
 
 - Finaliser le build et le mode installé de la PWA, le stockage durable, le cycle de vie et la restauration de l’état.
 - Vérifier l’installation via Chrome, les changements de version et la continuité des données locales sur l’origine canonique.

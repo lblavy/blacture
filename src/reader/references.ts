@@ -69,13 +69,18 @@ export function focusPosition(
   heading: HTMLElement,
   route: ReaderRoute,
 ): boolean {
-  if (!route.anchor) {
+  if (!route.anchor && !route.block) {
     heading.focus({ preventScroll: true });
     heading.scrollIntoView?.({ block: "start" });
     return true;
   }
-  const target = document.getElementById(route.anchor);
+  const target = positionTarget(contents, route);
   if (!target || !contents.contains(target)) return false;
+  revealPosition(target);
+  return true;
+}
+
+function revealPosition(target: HTMLElement) {
   for (
     let parent = target.parentElement?.closest("details");
     parent;
@@ -87,5 +92,11 @@ export function focusPosition(
   if (!target.matches("[tabindex], a[href], summary")) target.tabIndex = -1;
   target.focus({ preventScroll: true });
   target.scrollIntoView?.({ block: "center" });
-  return true;
+}
+
+function positionTarget(contents: HTMLElement, route: ReaderRoute) {
+  if (route.anchor) return document.getElementById(route.anchor);
+  return Array.from(
+    contents.querySelectorAll<HTMLElement>("[data-block-id]"),
+  ).find((element) => element.dataset.blockId === route.block);
 }

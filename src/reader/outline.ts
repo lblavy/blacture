@@ -1,4 +1,6 @@
 import type { ImportedSection } from "../import";
+import type { CatalogProgress } from "../storage";
+import { progressLabel } from "./progress-session";
 
 interface Branch {
   disclosure: HTMLDetailsElement;
@@ -13,14 +15,20 @@ export function createOutline(
   const children = new Map<string | null, ImportedSection[]>();
   const byId = new Map<string, ImportedSection>();
   const buttons = new Map<string, HTMLButtonElement>();
+  const statusLabels = new Map<string, HTMLElement>();
   const branches = new Map<string, Branch>();
   let current: string | undefined;
+  let statuses: Readonly<
+    Record<string, Pick<CatalogProgress, "status" | "percent">>
+  > = {};
 
   function show(sections: ImportedSection[]) {
     children.clear();
     byId.clear();
     buttons.clear();
+    statusLabels.clear();
     branches.clear();
+    statuses = {};
     current = undefined;
     for (const section of sections) addSection(section);
     container.replaceChildren(renderList(children.get(null) ?? []));
@@ -50,7 +58,15 @@ export function createOutline(
     if (fragment) button.addEventListener("click", () => goTo(fragment));
     if (section.id === current) button.setAttribute("aria-current", "location");
     buttons.set(section.id, button);
-    item.append(button);
+    const line = document.createElement("div");
+    line.className = "outline-entry";
+    const state = document.createElement("small");
+    state.id = `section-progress-${section.id}`;
+    button.setAttribute("aria-describedby", state.id);
+    statusLabels.set(section.id, state);
+    renderProgress(section.id, state);
+    line.append(button, state);
+    item.append(line);
     const subsections = children.get(section.id);
     if (subsections?.length)
       item.append(makeBranch(section.id, title, subsections));
@@ -106,5 +122,17 @@ export function createOutline(
     buttons.get(id)?.setAttribute("aria-current", "location");
   }
 
-  return { show, select };
+  function renderProgress(id: string, label: HTMLElement) {
+    const state = statuses[id];
+    const text = state ? progressLabel(state) : "";
+    if (text !== label.textContent) label.textContent = text;
+    label.hidden = !state;
+  }
+
+  function setProgress(sections: typeof statuses) {
+    statuses = sections;
+    for (const [id, label] of statusLabels) renderProgress(id, label);
+  }
+
+  return { show, select, setProgress };
 }

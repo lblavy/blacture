@@ -43,7 +43,7 @@
         </section>
       </section>
       <section id="reader" class="reader" aria-labelledby="reader-title" hidden>
-        <div class="reader-toolbar">
+        <div id="reader-toolbar" class="reader-toolbar">
           <button type="button" id="reader-back">
             Retour à la bibliothèque
           </button>
@@ -60,6 +60,30 @@
           </div>
         </div>
         <h2 id="reader-title" tabindex="-1"></h2>
+        <details id="reader-progress" class="reading-progress">
+          <summary>Progression de lecture</summary>
+          <div class="reading-modes">
+            <div>
+              <label for="reader-book-mode">État de l’ouvrage</label>
+              <p id="reader-progress-state" role="status"></p>
+              <select id="reader-book-mode" disabled>
+                <option value="auto">Automatique</option>
+                <option value="read">Lu</option>
+                <option value="unread">Non lu</option>
+              </select>
+            </div>
+            <div>
+              <label for="reader-section-mode">État de la section</label>
+              <p id="reader-section-progress" role="status"></p>
+              <select id="reader-section-mode" disabled>
+                <option value="auto">Automatique</option>
+                <option value="read">Lue</option>
+                <option value="unread">Non lue</option>
+              </select>
+            </div>
+          </div>
+          <p id="reader-progress-error" role="status"></p>
+        </details>
         <div class="reader-layout">
           <details id="reader-toc-panel" class="reader-outline">
             <summary>Sommaire</summary>

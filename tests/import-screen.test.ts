@@ -28,7 +28,10 @@ function fixture() {
   Object.defineProperty(controls.file, "files", {
     get: () => ({ item: () => new File(["# Article"], "article.md") }),
   });
-  const openBook = vi.fn().mockResolvedValue(undefined);
+  const actions = {
+    open: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn().mockResolvedValue(undefined),
+  };
   const services = {
     runImport: vi
       .fn()
@@ -38,17 +41,17 @@ function fixture() {
   };
   const submit = () =>
     controls.form.dispatchEvent(new Event("submit", { cancelable: true }));
-  return { controls, services, submit, openBook };
+  return { controls, services, submit, actions };
 }
 
 it("renders the catalogue and refreshes it only upon a successful commit", async () => {
-  const { controls, services, submit, openBook } = fixture();
+  const { controls, services, submit, actions } = fixture();
   services.listBooks.mockResolvedValueOnce([]);
   services.runImport.mockImplementation((_source, _signal, onProgress) => {
     onProgress("parse");
     return Promise.resolve({ diagnostics: [] } as unknown as ImportedBook);
   });
-  startImportScreen(controls, openBook, services);
+  startImportScreen(controls, actions, services);
   submit();
   expect(controls.submit.disabled).toBe(true);
   expect(controls.status.textContent).toMatch(/Analyse/);
@@ -60,19 +63,19 @@ it("renders the catalogue and refreshes it only upon a successful commit", async
   const button = controls.catalog.querySelector("button");
   expect(button?.textContent).toBe(entry.title);
   button?.click();
-  expect(openBook).toHaveBeenCalledWith(entry);
+  expect(actions.open).toHaveBeenCalledWith(entry);
   expect(controls.empty.hidden).toBe(true);
 });
 
 it("shows data loss diagnostics without publishing the edition", async () => {
-  const { controls, services, submit, openBook } = fixture();
+  const { controls, services, submit, actions } = fixture();
   services.runImport.mockResolvedValue({
     diagnostics: [
       { code: "duplicate-anchor", severity: "error", count: 1 },
       { code: "test-warning", severity: "warning", count: 2 },
     ],
   });
-  startImportScreen(controls, openBook, services);
+  startImportScreen(controls, actions, services);
   submit();
   await vi.waitFor(() => expect(controls.submit.disabled).toBe(false));
   expect(controls.diagnostics.hidden).toBe(false);
@@ -86,28 +89,28 @@ it("shows data loss diagnostics without publishing the edition", async () => {
 });
 
 it("cancels a busy import and leaves the saved catalogue intact", async () => {
-  const { controls, services, submit, openBook } = fixture();
+  const { controls, services, submit, actions } = fixture();
   services.runImport.mockImplementation(
     (_source, signal: AbortSignal) =>
       new Promise((_, reject) => {
         signal.addEventListener("abort", () => reject(signal.reason));
       }),
   );
-  startImportScreen(controls, openBook, services);
+  startImportScreen(controls, actions, services);
   submit();
   controls.cancel.click();
   await vi.waitFor(() =>
     expect(controls.status.textContent).toBe("Import annulé."),
   );
-  expect(controls.catalog.textContent).toBe(entry.title);
+  expect(controls.catalog.textContent).toContain(entry.title);
   expect(controls.cancel.hidden).toBe(true);
 });
 
 it("reports errors opening the catalogue and starting an import", async () => {
-  const { controls, services, submit, openBook } = fixture();
+  const { controls, services, submit, actions } = fixture();
   services.listBooks.mockRejectedValueOnce(new Error("Stockage indisponible"));
   services.runImport.mockRejectedValueOnce(new Error("Fichier inaccessible"));
-  startImportScreen(controls, openBook, services);
+  startImportScreen(controls, actions, services);
   await vi.waitFor(() =>
     expect(controls.status.textContent).toMatch(/catalogue local/),
   );
@@ -118,9 +121,9 @@ it("reports errors opening the catalogue and starting an import", async () => {
 });
 
 it("reports failure opening a local work", async () => {
-  const { controls, services, openBook } = fixture();
-  openBook.mockRejectedValueOnce(new Error("Fragment manquant"));
-  startImportScreen(controls, openBook, services);
+  const { controls, services, actions } = fixture();
+  actions.open.mockRejectedValueOnce(new Error("Fragment manquant"));
+  startImportScreen(controls, actions, services);
   await vi.waitFor(() =>
     expect(controls.catalog.querySelector("button")).toBeTruthy(),
   );
@@ -131,9 +134,30 @@ it("reports failure opening a local work", async () => {
 });
 
 it("shows an empty catalogue after checking local storage", async () => {
-  const { controls, services, openBook } = fixture();
+  const { controls, services, actions } = fixture();
   services.listBooks.mockResolvedValue([]);
-  startImportScreen(controls, openBook, services);
+  startImportScreen(controls, actions, services);
   await vi.waitFor(() => expect(controls.empty.hidden).toBe(false));
   expect(controls.catalog.children).toHaveLength(0);
+});
+
+it("keeps the last consultation available when all reading is complete", async () => {
+  const { controls, services, actions } = fixture();
+  services.listBooks.mockResolvedValue([
+    { ...entry, progress: { status: "complete", percent: 100, hasLast: true } },
+  ]);
+  startImportScreen(controls, actions, services);
+  await vi.waitFor(() =>
+    expect(controls.catalog.textContent).toContain("Terminé"),
+  );
+  const options = Array.from(controls.catalog.querySelectorAll("button"));
+  expect(options.map((button) => button.textContent)).toEqual([
+    entry.title,
+    "Dernière consultation",
+  ]);
+  options.at(-1)?.click();
+  expect(actions.resume).toHaveBeenCalledWith(
+    expect.objectContaining({ key: entry.key }),
+    "last",
+  );
 });

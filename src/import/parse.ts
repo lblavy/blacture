@@ -116,6 +116,15 @@ const commonProperties = [
   "title",
 ];
 
+const editorialRoles = [
+  "navigation",
+  "doc-toc",
+  "doc-endnotes",
+  "doc-footnote",
+  "doc-noteref",
+  "doc-backlink",
+];
+
 const retainedProperties: Record<string, string[]> = {
   a: ["dataFootnoteBackref", "dataFootnoteRef", "href"],
   col: ["span"],
@@ -132,7 +141,10 @@ const retainedProperties: Record<string, string[]> = {
 
 const articleSchema: SanitizeSchema = {
   tagNames: editorialTags,
-  attributes: { ...retainedProperties, "*": commonProperties },
+  attributes: {
+    ...retainedProperties,
+    "*": [...commonProperties, ["role", ...editorialRoles]],
+  },
   ancestors: {
     tbody: ["table"],
     td: ["table"],
@@ -279,6 +291,11 @@ function inspectProperties(element: Element, report: ReportDiagnostic) {
     : [];
   for (const property of Object.keys(element.properties)) {
     if (commonProperties.includes(property) || allowed?.includes(property))
+      continue;
+    if (
+      property === "role" &&
+      editorialRoles.includes(stringProperty(element, "role") ?? "")
+    )
       continue;
     report("unsupported-attribute", "warning");
     if (

@@ -3,6 +3,11 @@ import { readManifest, type CatalogEntry, type Manifest } from "../storage";
 import { createOutline } from "./outline";
 import { applyFontPreference } from "./preferences";
 import {
+  createProgressSession,
+  type ProgressControls,
+  type ResumeKind,
+} from "./progress-session";
+import {
   clickedLink,
   externalUrl,
   focusPosition,
@@ -31,6 +36,7 @@ interface ReaderControls {
   returnToLibrary: HTMLButtonElement;
   returnToReference: HTMLButtonElement;
   status: HTMLElement;
+  progress: ProgressControls;
 }
 
 interface BookNavigation {
@@ -58,12 +64,16 @@ function buildNavigation(key: string, manifest: Manifest): BookNavigation {
   return { key, manifest, order, lookup };
 }
 
-export function startReader(controls: ReaderControls) {
+export function startReader(
+  controls: ReaderControls,
+  refreshCatalog: () => void = () => {},
+) {
   const renderer = createFragmentRenderer(controls.contents);
   const listeners = new AbortController();
   let book: BookNavigation | undefined;
   let displayed: DisplayedPosition | undefined;
   let request: AbortController | undefined;
+  let pendingResume: AbortController | undefined;
   let trail: ReturnPoint[] = [];
   let focusBeforeReading: HTMLElement | undefined;
   let lastEntry: string | undefined;
@@ -73,6 +83,9 @@ export function startReader(controls: ReaderControls) {
     controls.outlinePanel,
     goToFragment,
   );
+  const progress = createProgressSession(controls.progress, ({ sections }) =>
+    outline.setProgress(sections),
+  );
 
   function disableNavigation() {
     controls.previous.disabled = true;
@@ -81,6 +94,7 @@ export function startReader(controls: ReaderControls) {
   }
 
   function resetReader() {
+    progress.close();
     displayed = undefined;
     book = undefined;
     trail = [];
@@ -92,6 +106,7 @@ export function startReader(controls: ReaderControls) {
     disableNavigation();
     focusBeforeReading?.focus();
     focusBeforeReading = undefined;
+    void progress.settled().then(refreshCatalog);
   }
 
   function showLoading(route: ReaderRoute) {
@@ -134,13 +149,20 @@ export function startReader(controls: ReaderControls) {
     controls.previous.disabled = position.index === 0;
     controls.next.disabled = position.index === navigation.order.length - 1;
     outline.select(position.section);
-    controls.status.textContent = focusPosition(
-      controls.contents,
-      controls.heading,
-      route,
-    )
+    const focused = focusPosition(controls.contents, controls.heading, route);
+    controls.status.textContent = focused
       ? `Fragment ${position.index + 1} sur ${navigation.order.length}.`
       : "Renvoi indisponible dans ce fragment.";
+    progress.show({
+      key: navigation.key,
+      manifest: navigation.manifest,
+      section: position.section,
+      position: {
+        fragmentId: fragment,
+        ...(focused && route.anchor ? { anchor: route.anchor } : {}),
+        ...(focused && route.block ? { blockId: route.block } : {}),
+      },
+    });
   }
 
   async function render(
@@ -148,6 +170,7 @@ export function startReader(controls: ReaderControls) {
     nextTrail: ReturnPoint[],
   ) {
     request?.abort();
+    progress.pause();
     if (!route) {
       resetReader();
       return;
@@ -212,6 +235,7 @@ export function startReader(controls: ReaderControls) {
     const nextTrail = route ? readReturnTrail(history.state, route.book) : [];
     const entry = hash + JSON.stringify(nextTrail);
     if (entry !== lastEntry) {
+      pendingResume?.abort();
       lastEntry = entry;
       rendering = render(route, nextTrail);
     }
@@ -219,6 +243,7 @@ export function startReader(controls: ReaderControls) {
   }
 
   function navigate(route?: ReaderRoute, returnPoints: ReturnPoint[] = []) {
+    pendingResume?.abort();
     const url = new URL(location.href);
     url.hash = route ? readerHash(route) : "";
     const state = route
@@ -234,6 +259,28 @@ export function startReader(controls: ReaderControls) {
     const route: ReaderRoute = { book: entry.key };
     if (entry.firstFragmentId) route.fragment = entry.firstFragmentId;
     return navigate(route);
+  }
+
+  async function resume(entry: CatalogEntry, kind: ResumeKind) {
+    pendingResume?.abort();
+    const controller = new AbortController();
+    pendingResume = controller;
+    try {
+      const position = await progress.resume(entry, kind, controller.signal);
+      if (controller.signal.aborted) return;
+      if (document.activeElement instanceof HTMLElement)
+        focusBeforeReading = document.activeElement;
+      return navigate({
+        book: entry.key,
+        fragment: position.fragmentId,
+        ...(position.anchor ? { anchor: position.anchor } : {}),
+        ...(position.blockId ? { block: position.blockId } : {}),
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      if (pendingResume === controller) pendingResume = undefined;
+    }
   }
 
   function goToFragment(fragment: string) {
@@ -356,10 +403,13 @@ export function startReader(controls: ReaderControls) {
 
   return {
     open,
+    resume,
     dispose() {
       listeners.abort();
       request?.abort();
+      pendingResume?.abort();
       renderer.clear();
+      progress.dispose();
     },
   };
 }

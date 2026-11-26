@@ -7,9 +7,12 @@ import {
   readFontSize,
   readFragment,
   readManifest,
+  readProgress,
+  readReadingIndex,
   readResources,
   saveEdition,
   saveFontSize,
+  updateProgress,
 } from "../src/storage";
 
 function book(id = "edition-1"): ImportedBook {
@@ -52,36 +55,191 @@ async function resetDatabase() {
   });
 }
 
+async function seedLegacyEdition(source: ImportedBook, version: 1 | 2) {
+  const key = JSON.stringify([source.workId, source.editionId]);
+  const { fragments, resources, ...manifest } = source;
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("blacture-library", version);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore("catalog").add(
+        {
+          key,
+          title: source.title,
+          firstFragmentId: "first",
+          resourceBytes: 3,
+        },
+        key,
+      );
+      db.createObjectStore("manifests").add(manifest, key);
+      db.createObjectStore("fragments").add(fragments[0], [key, "first"]);
+      db.createObjectStore("resources").add(resources[0], [key, "image"]);
+      if (version === 2)
+        db.createObjectStore("preferences").add("small", "font-size");
+    };
+    request.onsuccess = () => {
+      request.result.close();
+      resolve();
+    };
+    request.onerror = () => reject(request.error);
+  });
+  return { key, manifest, fragments, resources };
+}
+
 describe("publication atomique d’une édition", () => {
   beforeEach(resetDatabase);
 
-  it("ajoute les préférences en v2 sans altérer une édition écrite par B02", async () => {
+  it("migre une base B03 et conserve préférences, catalogue et ressources", async () => {
     const source = book();
-    const key = JSON.stringify([source.workId, source.editionId]);
-    const { fragments, resources, ...manifest } = source;
-    await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open("blacture-library", 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        db.createObjectStore("catalog").add(
-          {
-            key,
-            title: source.title,
-            firstFragmentId: "first",
-            resourceBytes: 3,
-          },
-          key,
-        );
-        db.createObjectStore("manifests").add(manifest, key);
-        db.createObjectStore("fragments").add(fragments[0], [key, "first"]);
-        db.createObjectStore("resources").add(resources[0], [key, "image"]);
-      };
-      request.onsuccess = () => {
-        request.result.close();
-        resolve();
-      };
-      request.onerror = () => reject(request.error);
+    source.fragments[0]!.html = '<p data-block-id="p">Texte.</p>';
+    const { key, fragments, resources, manifest } = await seedLegacyEdition(
+      source,
+      2,
+    );
+
+    await updateProgress(key, (current) => ({
+      state: {
+        ...current,
+        observations: { passage: { elapsedMs: 8000, coverage: 1 } },
+      },
+      summary: { status: "complete", percent: 100, hasLast: false },
+    }));
+    expect(await readProgress(key)).toMatchObject({
+      observations: { passage: { elapsedMs: 8000, coverage: 1 } },
     });
+    expect(await listBooks()).toEqual([
+      {
+        key,
+        title: source.title,
+        firstFragmentId: "first",
+        resourceBytes: 3,
+        progress: { status: "complete", percent: 100, hasLast: false },
+      },
+    ]);
+    expect(await readFontSize()).toBe("small");
+    expect(await readManifest(key)).toEqual(manifest);
+    expect(await readFragment(key, "first")).toEqual(fragments[0]);
+    expect(await readReadingIndex(key, manifest)).toMatchObject({
+      fragments: { first: [{ id: "p", weight: 6 }] },
+    });
+    const [resource] = await readResources(key, ["image"]);
+    expect(resource).toMatchObject({ id: "image", mimeType: "image/png" });
+    expect(Array.from(resource!.bytes)).toEqual(
+      Array.from(resources[0]!.bytes),
+    );
+  });
+
+  it("applique deux mutations concurrentes à l’état le plus récent de la même édition", async () => {
+    const { key } = await saveEdition(book());
+    const other = await saveEdition(book("édition indépendante"));
+    const changes = await Promise.all(
+      ["one", "two"].map((id) =>
+        updateProgress(key, (current) => ({
+          state: {
+            ...current,
+            observations: {
+              ...current.observations,
+              [id]: { elapsedMs: 500, coverage: 0.4 },
+            },
+          },
+        })),
+      ),
+    );
+    expect(
+      changes.map((result) => Object.keys(result.observations).length).sort(),
+    ).toEqual([1, 2]);
+    expect(await readProgress(key)).toMatchObject({
+      observations: {
+        one: { elapsedMs: 500, coverage: 0.4 },
+        two: { elapsedMs: 500, coverage: 0.4 },
+      },
+    });
+    expect(await readProgress(other.key)).toMatchObject({
+      observations: {},
+      modes: {},
+    });
+  });
+
+  it("ne crée ni ouvrage ni progression pour une édition absente", async () => {
+    const change = vi.fn((state: Awaited<ReturnType<typeof readProgress>>) => ({
+      state,
+    }));
+    await expect(updateProgress("absent", change)).rejects.toThrow(
+      "Ouvrage introuvable",
+    );
+    expect(change).not.toHaveBeenCalled();
+    expect(await listBooks()).toEqual([]);
+    expect(await readProgress("absent")).toMatchObject({
+      observations: {},
+      modes: {},
+    });
+  });
+
+  it("laisse le résumé en place pour une mutation sans résumé et annule si la mutation échoue", async () => {
+    const { key } = await saveEdition(book());
+    await updateProgress(key, (state) => ({
+      state,
+      summary: { status: "unstarted", percent: 0, hasLast: false },
+    }));
+    const expected = await updateProgress(key, (state, summary) => {
+      expect(summary).toEqual({
+        status: "unstarted",
+        percent: 0,
+        hasLast: false,
+      });
+      return { state };
+    });
+    await expect(
+      updateProgress(key, () => {
+        throw new Error("Mutation invalide");
+      }),
+    ).rejects.toThrow("Mutation invalide");
+    expect(await readProgress(key)).toEqual(expected);
+    expect(await listBooks()).toMatchObject([
+      { key, progress: { status: "unstarted", percent: 0, hasLast: false } },
+    ]);
+  });
+
+  it("annule aussi la progression si l’écriture du résumé au catalogue échoue", async () => {
+    const entry = await saveEdition(book());
+    const put = IDBObjectStore.prototype.put;
+    const quota = vi
+      .spyOn(IDBObjectStore.prototype, "put")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        value: unknown,
+        key?: IDBValidKey,
+      ) {
+        if (this.name === "catalog")
+          throw new DOMException("Quota", "QuotaExceededError");
+        return put.call(this, value, key);
+      });
+    try {
+      await expect(
+        updateProgress(entry.key, (current) => ({
+          state: {
+            ...current,
+            observations: { passage: { elapsedMs: 1000, coverage: 0.5 } },
+          },
+          summary: { status: "partial", percent: 50, hasLast: false },
+        })),
+      ).rejects.toMatchObject({ name: "QuotaExceededError" });
+      expect(await readProgress(entry.key)).toMatchObject({ observations: {} });
+      expect(await listBooks()).toEqual([entry]);
+    } finally {
+      quota.mockRestore();
+    }
+    await expect(
+      readProgress(entry.key, AbortSignal.abort()),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("ajoute les préférences sans altérer une édition écrite par B02", async () => {
+    const source = book();
+    const { key, fragments, resources, manifest } = await seedLegacyEdition(
+      source,
+      1,
+    );
     expect(await readFontSize()).toBe("medium");
     await saveFontSize("large");
     expect(await readFontSize()).toBe("large");

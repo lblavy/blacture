@@ -9,22 +9,7 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
   return node as T;
 }
 
-const reader = startReader({
-  library: element("library"),
-  panel: element("reader"),
-  heading: element("reader-title"),
-  contents: element("fragment-preview"),
-  outline: element("reader-toc"),
-  outlinePanel: element<HTMLDetailsElement>("reader-toc-panel"),
-  fontSize: element<HTMLSelectElement>("reader-font-size"),
-  previous: element<HTMLButtonElement>("reader-previous"),
-  next: element<HTMLButtonElement>("reader-next"),
-  returnToLibrary: element<HTMLButtonElement>("reader-back"),
-  returnToReference: element<HTMLButtonElement>("reader-return"),
-  status: element("reader-status"),
-});
-
-startImportScreen(
+const catalog = startImportScreen(
   {
     form: element<HTMLFormElement>("import-form"),
     file: element<HTMLInputElement>("markdown-file"),
@@ -35,7 +20,38 @@ startImportScreen(
     catalog: element("catalog"),
     empty: element("catalog-empty"),
   },
-  reader.open,
+  {
+    open: (entry) => reader.open(entry),
+    resume: (entry, kind) => reader.resume(entry, kind),
+  },
+);
+
+const contents = element("fragment-preview");
+const reader = startReader(
+  {
+    library: element("library"),
+    panel: element("reader"),
+    heading: element("reader-title"),
+    contents,
+    outline: element("reader-toc"),
+    outlinePanel: element<HTMLDetailsElement>("reader-toc-panel"),
+    fontSize: element<HTMLSelectElement>("reader-font-size"),
+    previous: element<HTMLButtonElement>("reader-previous"),
+    next: element<HTMLButtonElement>("reader-next"),
+    returnToLibrary: element<HTMLButtonElement>("reader-back"),
+    returnToReference: element<HTMLButtonElement>("reader-return"),
+    status: element("reader-status"),
+    progress: {
+      toolbar: element("reader-toolbar"),
+      contents,
+      bookState: element("reader-progress-state"),
+      sectionState: element("reader-section-progress"),
+      bookMode: element<HTMLSelectElement>("reader-book-mode"),
+      sectionMode: element<HTMLSelectElement>("reader-section-mode"),
+      error: element("reader-progress-error"),
+    },
+  },
+  catalog.refresh,
 );
 
 if (import.meta.env.PROD) {

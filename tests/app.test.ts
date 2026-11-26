@@ -1,12 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
 import html from "../index.html?raw";
 
-const { start, startReader, openBook, register } = vi.hoisted(() => ({
-  start: vi.fn(),
-  startReader: vi.fn(),
-  openBook: vi.fn(),
-  register: vi.fn(),
-}));
+const { start, startReader, openBook, resumeBook, refreshCatalog, register } =
+  vi.hoisted(() => ({
+    start: vi.fn(),
+    startReader: vi.fn(),
+    openBook: vi.fn(),
+    resumeBook: vi.fn(),
+    refreshCatalog: vi.fn(),
+    register: vi.fn(),
+  }));
 vi.mock("../src/import-screen", () => ({ startImportScreen: start }));
 vi.mock("../src/reader", () => ({ startReader }));
 vi.mock("../src/worker-client", () => ({ registerOfflineWorker: register }));
@@ -23,7 +26,8 @@ it("mounts the import screen and registers offline support in production", async
     "text/html",
   ).body.innerHTML;
   vi.stubEnv("PROD", true);
-  startReader.mockReturnValue({ open: openBook });
+  start.mockReturnValue({ refresh: refreshCatalog });
+  startReader.mockReturnValue({ open: openBook, resume: resumeBook });
   await import("../src/main");
   expect(startReader).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -31,10 +35,14 @@ it("mounts the import screen and registers offline support in production", async
       contents: document.querySelector("#fragment-preview"),
       outline: document.querySelector("#reader-toc"),
     }),
+    refreshCatalog,
   );
   expect(start).toHaveBeenCalledWith(
     expect.objectContaining({ file: document.querySelector("input") }),
-    openBook,
+    expect.objectContaining({
+      open: expect.any(Function),
+      resume: expect.any(Function),
+    }),
   );
   expect(register).toHaveBeenCalledWith(
     document.querySelector("#offline-status"),
@@ -47,7 +55,8 @@ it("mounts without installing a service worker in development", async () => {
     html,
     "text/html",
   ).body.innerHTML;
-  startReader.mockReturnValue({ open: openBook });
+  start.mockReturnValue({ refresh: refreshCatalog });
+  startReader.mockReturnValue({ open: openBook, resume: resumeBook });
   await import("../src/main");
   expect(start).toHaveBeenCalledOnce();
   expect(register).not.toHaveBeenCalled();

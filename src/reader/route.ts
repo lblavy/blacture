@@ -2,6 +2,7 @@ export interface ReaderRoute {
   book: string;
   fragment?: string;
   anchor?: string;
+  block?: string;
 }
 
 export interface ReturnPoint {
@@ -20,8 +21,10 @@ export function parseReaderRoute(hash: string): ReaderRoute | undefined {
   const route: ReaderRoute = { book };
   const fragment = parameters.get("fragment");
   const anchor = parameters.get("anchor");
+  const block = parameters.get("block");
   if (fragment) route.fragment = fragment;
   if (anchor) route.anchor = anchor;
+  if (block) route.block = block;
   return route;
 }
 
@@ -29,6 +32,7 @@ export function readerHash(route: ReaderRoute): string {
   const parameters = new URLSearchParams({ book: route.book });
   if (route.fragment) parameters.set("fragment", route.fragment);
   if (route.anchor) parameters.set("anchor", route.anchor);
+  if (route.block) parameters.set("block", route.block);
   return routePrefix + parameters.toString();
 }
 
