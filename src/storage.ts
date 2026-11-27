@@ -1,16 +1,28 @@
 import {
   EMPTY_PROGRESS,
+  summarizeProgress,
   type ProgressState,
   type ReadingIndex,
   type ReadingStatus,
   type ReadingUnit,
 } from "./domain/progress";
+import {
+  mergeProgressEvents,
+  type ProgressEvent,
+} from "./domain/progress-sync";
 import type {
   ImportedBook,
   ImportedFragment,
   ImportedResource,
 } from "./import";
 import { extractReadingUnits } from "./reading-index";
+import type { TransferTicket } from "./sync/drive-upload";
+import {
+  initialProgressChanges,
+  maxProgressClock,
+  type ProgressChange,
+  type ProgressJournal,
+} from "./sync/local-progress";
 
 export interface CatalogProgress {
   status: ReadingStatus;
@@ -30,17 +42,47 @@ export type Manifest = Omit<ImportedBook, "fragments" | "resources">;
 export type FontSize = "small" | "medium" | "large";
 
 const stores = ["catalog", "manifests", "fragments", "resources"];
+const journalHeads = "progress-journal-heads";
+const journalEvents = "progress-journal-events";
+const remoteEvents = "progress-remote-events";
+// Leave ample local counter space even when Drive contains an aberrant clock.
+const maxRemoteProgressClock = 2 ** 48;
+const driveTickets = "drive-transfer-tickets";
+const driveProgress = "drive-progress-cursors";
+const driveSelections = "drive-edition-selections";
+const selectedEditions = "selected-editions";
+const driveBindingPreference = "drive-account-binding";
+const journalWriteStores = [
+  journalHeads,
+  journalEvents,
+  "preferences",
+  "manifests",
+];
+const devicePreference = "progress-device-id";
+
+interface JournalHead {
+  deviceId: string;
+  clock: number;
+}
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("blacture-library", 3);
+    const request = indexedDB.open("blacture-library", 4);
     request.onupgradeneeded = ({ oldVersion }) => {
       if (oldVersion === 0) {
         for (const store of stores) request.result.createObjectStore(store);
       }
       if (oldVersion < 2) request.result.createObjectStore("preferences");
-      request.result.createObjectStore("progress");
-      request.result.createObjectStore("reading-indexes");
+      if (oldVersion < 3) {
+        request.result.createObjectStore("progress");
+        request.result.createObjectStore("reading-indexes");
+      }
+      request.result.createObjectStore(journalHeads);
+      request.result.createObjectStore(journalEvents);
+      request.result.createObjectStore(remoteEvents);
+      request.result.createObjectStore(driveTickets);
+      request.result.createObjectStore(driveProgress);
+      request.result.createObjectStore(driveSelections);
     };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -168,6 +210,87 @@ export function listBooks(): Promise<CatalogEntry[]> {
   return read("catalog", (store) => store.getAll());
 }
 
+function editionRange(key: string) {
+  // A compound string prefix ends before the first array value.
+  return IDBKeyRange.bound([key], [key, []], false, true);
+}
+
+function orderEditionFragments(
+  manifest: Manifest,
+  stored: readonly ImportedFragment[],
+): ImportedFragment[] {
+  const fragments = new Map(stored.map((fragment) => [fragment.id, fragment]));
+  const ordered: ImportedFragment[] = [];
+  for (const section of manifest.sections) {
+    for (const id of section.fragmentIds) {
+      const fragment = fragments.get(id);
+      if (fragment?.sectionId !== section.id)
+        throw new Error("Édition incohérente.");
+      ordered.push(fragment);
+      fragments.delete(id);
+    }
+  }
+  if (ordered.length !== stored.length) throw new Error("Édition incohérente.");
+  return ordered;
+}
+
+function readEditionResources(
+  tx: IDBTransaction,
+  key: string,
+  fragments: readonly ImportedFragment[],
+  fail: (error: unknown) => void,
+): ImportedResource[] {
+  const ids = new Set(fragments.flatMap((fragment) => fragment.resourceIds));
+  const resources: ImportedResource[] = [];
+  const store = tx.objectStore("resources");
+  for (const id of ids) {
+    const request = store.get([key, id]);
+    request.onsuccess = () => {
+      const resource: ImportedResource | undefined = request.result;
+      if (resource?.id === id) resources.push(resource);
+      else fail(new Error("Ressource de l’édition introuvable."));
+    };
+  }
+  return resources;
+}
+
+export function exportEdition(
+  key: string,
+  signal?: AbortSignal,
+): Promise<ImportedBook> {
+  return transact(
+    stores,
+    "readonly",
+    (tx, capture, fail) => {
+      const catalog = tx.objectStore("catalog").getKey(key);
+      const manifestRequest = tx.objectStore("manifests").get(key);
+      const fragmentsRequest = tx
+        .objectStore("fragments")
+        .getAll(editionRange(key));
+      fragmentsRequest.onsuccess = () => {
+        const manifest: Manifest | undefined = manifestRequest.result;
+        if (catalog.result === undefined || !manifest) {
+          fail(new Error("Ouvrage introuvable."));
+          return;
+        }
+        try {
+          if (JSON.stringify([manifest.workId, manifest.editionId]) !== key)
+            throw new Error("Édition incohérente.");
+          const fragments = orderEditionFragments(
+            manifest,
+            fragmentsRequest.result,
+          );
+          const resources = readEditionResources(tx, key, fragments, fail);
+          capture({ ...manifest, fragments, resources });
+        } catch (error) {
+          fail(error);
+        }
+      };
+    },
+    signal,
+  );
+}
+
 export function readFragment(
   key: string,
   id: string,
@@ -224,6 +347,173 @@ export function saveFontSize(size: FontSize): Promise<void> {
   });
 }
 
+export function readDriveBinding(): Promise<string | undefined> {
+  return read("preferences", (store) => store.get(driveBindingPreference));
+}
+
+function differentDriveAccount() {
+  return new Error(
+    "Compte Google Drive différent du compte associé à cette installation.",
+  );
+}
+
+export async function bindDriveAccount(accountId: string): Promise<void> {
+  if (!accountId.trim()) throw new Error("Compte Google Drive invalide.");
+  await transact(["preferences"], "readwrite", (tx, _capture, fail) => {
+    const preferences = tx.objectStore("preferences");
+    const binding = preferences.get(driveBindingPreference);
+    binding.onsuccess = () => {
+      try {
+        if (binding.result === undefined)
+          preferences.add(accountId, driveBindingPreference);
+        else if (binding.result !== accountId) fail(differentDriveAccount());
+      } catch (error) {
+        fail(error);
+      }
+    };
+  });
+}
+
+function driveValue<T>(
+  accountId: string,
+  storeName: string,
+  key: string,
+  update?: (previous: T | undefined) => T,
+): Promise<T | undefined> {
+  return transact(
+    ["preferences", storeName],
+    update ? "readwrite" : "readonly",
+    (tx, capture, fail) => {
+      const binding = tx.objectStore("preferences").get(driveBindingPreference);
+      binding.onsuccess = () => {
+        if (binding.result !== accountId) {
+          fail(differentDriveAccount());
+          return;
+        }
+        const store = tx.objectStore(storeName);
+        const storageKey = [accountId, key];
+        const request = store.get(storageKey);
+        request.onsuccess = () => {
+          try {
+            const previous: T | undefined = request.result;
+            const value = update ? update(previous) : previous;
+            if (value !== previous) store.put(value, storageKey);
+            capture(value);
+          } catch (error) {
+            fail(error);
+          }
+        };
+      };
+    },
+  );
+}
+
+export function readDriveTicket(
+  accountId: string,
+  key: string,
+): Promise<TransferTicket | undefined> {
+  return driveValue(accountId, driveTickets, key);
+}
+
+export async function writeDriveTicket(
+  accountId: string,
+  key: string,
+  ticket: TransferTicket,
+): Promise<void> {
+  await driveValue<TransferTicket>(accountId, driveTickets, key, (previous) => {
+    if (previous && previous.id !== ticket.id)
+      throw new Error("Transfert Google Drive déjà réservé.");
+    if (previous?.finished) return previous;
+    const { id, finished, location } = ticket;
+    return { id, finished, ...(!finished && location ? { location } : {}) };
+  });
+}
+
+export interface DriveProgressCursor {
+  sentThrough: number;
+  pendingThrough?: number;
+}
+
+export async function readDriveProgressCursor(
+  accountId: string,
+  key: string,
+): Promise<DriveProgressCursor> {
+  return (
+    (await driveValue<DriveProgressCursor>(accountId, driveProgress, key)) ?? {
+      sentThrough: 0,
+    }
+  );
+}
+
+function validDriveClock(clock: number) {
+  return Number.isSafeInteger(clock) && clock >= 0 && clock <= maxProgressClock;
+}
+
+function cursorIsObsolete(
+  previous: DriveProgressCursor,
+  next: DriveProgressCursor,
+) {
+  if (previous.pendingThrough === undefined)
+    return next.sentThrough !== previous.sentThrough;
+  if (next.sentThrough === previous.pendingThrough) return false;
+  return (
+    next.sentThrough !== previous.sentThrough ||
+    next.pendingThrough !== previous.pendingThrough
+  );
+}
+
+export async function writeDriveProgressCursor(
+  accountId: string,
+  key: string,
+  cursor: DriveProgressCursor,
+): Promise<void> {
+  const { sentThrough, pendingThrough } = cursor;
+  if (
+    !validDriveClock(sentThrough) ||
+    (pendingThrough !== undefined &&
+      (!validDriveClock(pendingThrough) || pendingThrough <= sentThrough))
+  )
+    throw new Error("Curseur Google Drive invalide.");
+  await driveValue<DriveProgressCursor>(
+    accountId,
+    driveProgress,
+    key,
+    (previous) => {
+      if (cursorIsObsolete(previous ?? { sentThrough: 0 }, cursor))
+        throw new Error("Curseur Google Drive obsolète.");
+      return {
+        sentThrough,
+        ...(pendingThrough !== undefined ? { pendingThrough } : {}),
+      };
+    },
+  );
+}
+
+export async function readDriveSelections(
+  accountId: string,
+): Promise<string[]> {
+  return (
+    (await driveValue<string[]>(
+      accountId,
+      driveSelections,
+      selectedEditions,
+    )) ?? []
+  );
+}
+
+export async function trackDriveEdition(
+  accountId: string,
+  key: string,
+): Promise<void> {
+  await driveValue<string[]>(
+    accountId,
+    driveSelections,
+    selectedEditions,
+    (previous) =>
+      previous?.includes(key) ? previous : [...(previous ?? []), key],
+  );
+}
+
 function initialProgress(): ProgressState {
   return structuredClone(EMPTY_PROGRESS);
 }
@@ -240,43 +530,262 @@ export async function readProgress(
   return saved ?? initialProgress();
 }
 
+function writeProgressEvents(
+  tx: IDBTransaction,
+  key: string,
+  head: JournalHead,
+  changes: readonly ProgressChange[],
+) {
+  if (head.clock + changes.length > maxProgressClock)
+    throw new Error("Horloge de progression épuisée.");
+  const events = tx.objectStore(journalEvents);
+  let { clock } = head;
+  for (const change of changes) {
+    const event: ProgressEvent = {
+      ...change,
+      deviceId: head.deviceId,
+      clock: ++clock,
+    };
+    events.add(event, [key, clock]);
+  }
+  tx.objectStore(journalHeads).put({ deviceId: head.deviceId, clock }, key);
+}
+
+function initializeJournal(
+  tx: IDBTransaction,
+  key: string,
+  state: ProgressState,
+  changes: readonly ProgressChange[],
+  fail: (error: unknown) => void,
+) {
+  const manifestRequest = tx.objectStore("manifests").get(key);
+  manifestRequest.onsuccess = () => {
+    const manifest: Manifest | undefined = manifestRequest.result;
+    if (!manifest) {
+      fail(new Error("Ouvrage introuvable."));
+      return;
+    }
+    const preferences = tx.objectStore("preferences");
+    const preference = preferences.get(devicePreference);
+    preference.onsuccess = () => {
+      try {
+        const existing: string | undefined = preference.result;
+        const deviceId = existing ?? crypto.randomUUID();
+        if (!existing) preferences.add(deviceId, devicePreference);
+        writeProgressEvents(tx, key, { deviceId, clock: 0 }, [
+          ...initialProgressChanges(state, manifest.sections),
+          ...changes,
+        ]);
+      } catch (error) {
+        fail(error);
+      }
+    };
+  };
+}
+
+function recordProgressChanges(
+  tx: IDBTransaction,
+  key: string,
+  previous: ProgressState,
+  changes: readonly ProgressChange[],
+  fail: (error: unknown) => void,
+) {
+  const headRequest = tx.objectStore(journalHeads).get(key);
+  headRequest.onsuccess = () => {
+    const head: JournalHead | undefined = headRequest.result;
+    try {
+      if (!head) initializeJournal(tx, key, previous, changes, fail);
+      else if (changes.length > 0) writeProgressEvents(tx, key, head, changes);
+    } catch (error) {
+      fail(error);
+    }
+  };
+}
+
+export function ensureProgressJournal(
+  key: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return transact(
+    ["progress", ...journalWriteStores],
+    "readwrite",
+    (tx, _capture, fail) => {
+      const previous = tx.objectStore("progress").get(key);
+      previous.onsuccess = () =>
+        recordProgressChanges(
+          tx,
+          key,
+          previous.result ?? initialProgress(),
+          [],
+          fail,
+        );
+    },
+    signal,
+  );
+}
+
+export function readProgressJournal(
+  key: string,
+  signal?: AbortSignal,
+): Promise<ProgressJournal | undefined> {
+  return transact(
+    [journalHeads, journalEvents],
+    "readonly",
+    (tx, capture) => {
+      const head = tx.objectStore(journalHeads).get(key);
+      head.onsuccess = () => {
+        const journal: JournalHead | undefined = head.result;
+        if (!journal) {
+          capture(undefined);
+          return;
+        }
+        const entries = readLocalEvents(tx, key);
+        entries.onsuccess = () =>
+          capture({ deviceId: journal.deviceId, events: entries.result });
+      };
+    },
+    signal,
+  );
+}
+
+function readLocalEvents(
+  tx: IDBTransaction,
+  key: string,
+): IDBRequest<ProgressEvent[]> {
+  const range = IDBKeyRange.bound([key, 1], [key, maxProgressClock]);
+  return tx.objectStore(journalEvents).getAll(range);
+}
+
+function appendRemoteEvents(
+  tx: IDBTransaction,
+  key: string,
+  head: JournalHead,
+  received: readonly ProgressEvent[],
+  local: readonly ProgressEvent[],
+  knownRemote: readonly ProgressEvent[],
+) {
+  const localClocks = new Set(local.map(({ clock }) => clock));
+  const known = new Set(
+    knownRemote.map(({ deviceId, clock }) => JSON.stringify([deviceId, clock])),
+  );
+  let clock = head.clock;
+  const store = tx.objectStore(remoteEvents);
+  for (const event of received) {
+    if (event.deviceId === head.deviceId) {
+      if (!localClocks.has(event.clock))
+        throw new Error("Événement local inconnu.");
+      continue;
+    }
+    if (event.clock > maxRemoteProgressClock)
+      throw new Error("Horloge de progression distante hors limites.");
+    clock = Math.max(clock, event.clock);
+    const identity = JSON.stringify([event.deviceId, event.clock]);
+    if (known.has(identity)) continue;
+    known.add(identity);
+    store.add(event, [key, event.deviceId, event.clock]);
+  }
+  if (clock !== head.clock)
+    tx.objectStore(journalHeads).put({ ...head, clock }, key);
+}
+
+export function applyRemoteProgress(
+  key: string,
+  index: ReadingIndex,
+  received: readonly ProgressEvent[],
+  signal?: AbortSignal,
+): Promise<ProgressState> {
+  return transact(
+    ["catalog", "progress", journalHeads, journalEvents, remoteEvents],
+    "readwrite",
+    (tx, capture, fail) => {
+      const headRequest = tx.objectStore(journalHeads).get(key);
+      const localRequest = readLocalEvents(tx, key);
+      const remoteRequest = tx
+        .objectStore(remoteEvents)
+        .getAll(editionRange(key));
+      const catalog = tx.objectStore("catalog");
+      const entry = catalog.get(key);
+      entry.onsuccess = () => {
+        // Requests within the transaction finish in submission order.
+        const head: JournalHead | undefined = headRequest.result;
+        const book: CatalogEntry | undefined = entry.result;
+        if (!head || !book) {
+          fail(new Error("Journal de progression introuvable."));
+          return;
+        }
+        try {
+          const local = localRequest.result;
+          const remote: ProgressEvent[] = remoteRequest.result;
+          const state = mergeProgressEvents(index, [
+            ...local,
+            ...remote,
+            ...received,
+          ]);
+          appendRemoteEvents(tx, key, head, received, local, remote);
+          signal?.throwIfAborted();
+          const { status, percent } = summarizeProgress(index, state).book;
+          tx.objectStore("progress").put(state, key);
+          catalog.put(
+            {
+              ...book,
+              progress: { status, percent, hasLast: Boolean(state.last) },
+            },
+            key,
+          );
+          capture(state);
+        } catch (error) {
+          fail(signal?.aborted ? signal.reason : error);
+        }
+      };
+    },
+    signal,
+  );
+}
+
+interface ProgressUpdate {
+  state: ProgressState;
+  summary?: CatalogProgress;
+  events?: readonly ProgressChange[];
+}
+
 export function updateProgress(
   key: string,
   change: (
     current: ProgressState,
     summary: CatalogProgress | undefined,
-  ) => {
-    state: ProgressState;
-    summary?: CatalogProgress;
-  },
+  ) => ProgressUpdate,
 ): Promise<ProgressState> {
-  return transact(["catalog", "progress"], "readwrite", (tx, capture, fail) => {
-    const catalog = tx.objectStore("catalog");
-    const progress = tx.objectStore("progress");
-    const entry = catalog.get(key);
-    entry.onsuccess = () => {
-      const book: CatalogEntry | undefined = entry.result;
-      if (!book) {
-        fail(new Error("Ouvrage introuvable."));
-        return;
-      }
-      const current = progress.get(key);
-      current.onsuccess = () => {
-        try {
-          const result = change(
-            current.result ?? initialProgress(),
-            book.progress,
-          );
-          progress.put(result.state, key);
-          if (result.summary)
-            catalog.put({ ...book, progress: result.summary }, key);
-          capture(result.state);
-        } catch (error) {
-          fail(error);
+  return transact(
+    ["catalog", "progress", ...journalWriteStores],
+    "readwrite",
+    (tx, capture, fail) => {
+      const catalog = tx.objectStore("catalog");
+      const progress = tx.objectStore("progress");
+      const entry = catalog.get(key);
+      entry.onsuccess = () => {
+        const book: CatalogEntry | undefined = entry.result;
+        if (!book) {
+          fail(new Error("Ouvrage introuvable."));
+          return;
         }
+        const current = progress.get(key);
+        current.onsuccess = () => {
+          try {
+            const previous: ProgressState = current.result ?? initialProgress();
+            const result = change(previous, book.progress);
+            progress.put(result.state, key);
+            if (result.summary)
+              catalog.put({ ...book, progress: result.summary }, key);
+            if (result.events?.length)
+              recordProgressChanges(tx, key, previous, result.events, fail);
+            capture(result.state);
+          } catch (error) {
+            fail(error);
+          }
+        };
       };
-    };
-  });
+    },
+  );
 }
 
 function unitsForFragment(
@@ -307,9 +816,7 @@ function scanReadingUnits(
     (tx, capture, fail) => {
       const results = new Map<string, ReadingUnit[]>();
       const ids = new Set<string>();
-      // IndexedDB orders strings before arrays; the exclusive upper bound delimits this compound prefix.
-      const range = IDBKeyRange.bound([key], [key, []], false, true);
-      const request = tx.objectStore("fragments").openCursor(range);
+      const request = tx.objectStore("fragments").openCursor(editionRange(key));
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) {

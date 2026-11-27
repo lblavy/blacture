@@ -1,4 +1,5 @@
 import type { Element, Properties, Root } from "hast";
+import { toHtml } from "hast-util-to-html";
 import type { Root as MarkdownRoot, Text as MarkdownText } from "mdast";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, {
@@ -159,6 +160,39 @@ const articleSchema: SanitizeSchema = {
   // All article IDs are replaced before serialization. Legacy anchor names are consumed here too.
   clobber: [],
 };
+
+const storedFragmentParser = unified().use(rehypeRaw).freeze();
+const storedFragmentSanitizer = unified()
+  .use(rehypeSanitize, {
+    ...articleSchema,
+    attributes: {
+      ...articleSchema.attributes,
+      "*": [...commonProperties, ["role", ...editorialRoles], "dataBlockId"],
+      a: [
+        "dataFootnoteBackref",
+        "dataFootnoteRef",
+        "dataTargetAnchor",
+        "dataExternalUrl",
+      ],
+      img: ["alt", "height", "width", "dataResourceId"],
+    },
+  })
+  .freeze();
+
+const ignoredPreNewline = /(<pre(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>)\n/g;
+
+export function validateStoredFragment(html: string): Root {
+  const parsed = storedFragmentParser.runSync({
+    type: "root",
+    children: [{ type: "raw", value: html }],
+  }) as Root;
+  const sanitized = storedFragmentSanitizer.runSync(parsed) as Root;
+  // Fragment parsing consumes the first line feed after a pre start tag.
+  // Make only that normalization when checking the stored serialization.
+  if (html.replace(ignoredPreNewline, "$1") !== toHtml(sanitized))
+    throw new Error("Contenu HTML non autorisé dans le paquet d’édition.");
+  return sanitized;
+}
 
 export function parseMarkdown(
   source: string,

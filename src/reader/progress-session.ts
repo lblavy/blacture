@@ -1,5 +1,7 @@
 import {
   BOOK_SCOPE,
+  FULL_COVERAGE,
+  READING_TIME_MS,
   changeMode,
   effectiveMode,
   isUnitComplete,
@@ -20,6 +22,7 @@ import {
   type CatalogProgress,
   type Manifest,
 } from "../storage";
+import type { ProgressChange } from "../sync/local-progress";
 import { watchReading, type ReadingSample } from "./reading-observer";
 
 export interface ProgressControls {
@@ -40,6 +43,11 @@ interface Passage {
 }
 
 type Summary = ReturnType<typeof summarizeProgress>;
+
+interface ProgressUpdate {
+  state: ProgressState;
+  events?: readonly ProgressChange[];
+}
 
 interface BookProgress {
   key: string;
@@ -73,6 +81,23 @@ function samePosition(a: ReadingPosition | undefined, b: ReadingPosition) {
     a?.fragmentId === b.fragmentId &&
     a.blockId === b.blockId &&
     a.anchor === b.anchor
+  );
+}
+
+function visitEvents(
+  previous: ProgressState,
+  next: ProgressState,
+): ProgressChange[] {
+  return next.last && !samePosition(previous.last, next.last)
+    ? [{ kind: "visit", position: next.last }]
+    : [];
+}
+
+function sameModes(previous: ProgressState, next: ProgressState) {
+  const keys = Object.keys(previous.modes);
+  return (
+    keys.length === Object.keys(next.modes).length &&
+    keys.every((key) => previous.modes[key] === next.modes[key])
   );
 }
 
@@ -110,7 +135,7 @@ export function createProgressSession(
 
   function save(
     session: BookProgress,
-    change: (state: ProgressState) => ProgressState,
+    change: (state: ProgressState) => ProgressUpdate,
     refreshSummary = false,
   ) {
     writes = writes
@@ -119,8 +144,9 @@ export function createProgressSession(
         session.state = await updateProgress(
           session.key,
           (previous, previousSummary) => {
-            const state = change(previous);
-            if (state === previous && !refreshSummary) return { state };
+            const result = change(previous);
+            const { state } = result;
+            if (state === previous && !refreshSummary) return result;
             summary = summarizeProgress(session.index, state);
             const { status, percent } = summary.book;
             const hasLast = Boolean(state.last);
@@ -129,8 +155,8 @@ export function createProgressSession(
               percent === previousSummary.percent &&
               hasLast === previousSummary.hasLast
             )
-              return { state };
-            return { state, summary: { status, percent, hasLast } };
+              return result;
+            return { ...result, summary: { status, percent, hasLast } };
           },
         );
         if (summary) session.summary = summary;
@@ -161,15 +187,28 @@ export function createProgressSession(
       session.state.last?.fragmentId === position.fragmentId &&
       session.state.last.blockId === sample.id;
     if (unchanged && (sample.elapsedMs === 0 || isUnitComplete(prior))) return;
-    save(session, (state) => {
-      const positioned = setLastConsultation(session.index, state, position);
-      return observeReading(
+    save(session, (previous) => {
+      const positioned = setLastConsultation(session.index, previous, position);
+      const state = observeReading(
         session.index,
         positioned,
         sample.id,
         sample.elapsedMs,
         sample.coverage,
       );
+      const events = visitEvents(previous, positioned);
+      if (state !== positioned)
+        events.push({
+          kind: "observe",
+          samples: [
+            {
+              unitId: sample.id,
+              elapsedMs: Math.min(sample.elapsedMs, READING_TIME_MS),
+              coverage: sample.coverage & FULL_COVERAGE,
+            },
+          ],
+        });
+      return { state, events };
     });
   }
 
@@ -190,7 +229,14 @@ export function createProgressSession(
     applySummary(session, passage);
     save(
       session,
-      (state) => setLastConsultation(session.index, state, passage.position),
+      (previous) => {
+        const state = setLastConsultation(
+          session.index,
+          previous,
+          passage.position,
+        );
+        return { state, events: visitEvents(previous, state) };
+      },
       true,
     );
     watchPassage(session, passage);
@@ -203,6 +249,7 @@ export function createProgressSession(
           if (samePosition(state.last, passage.position)) return { state };
           return {
             state: { ...state, last: passage.position },
+            events: [{ kind: "visit", position: passage.position }],
             summary: {
               status: summary?.status ?? "unstarted",
               percent: summary?.percent ?? 0,
@@ -284,9 +331,12 @@ export function createProgressSession(
     const session = ready;
     if (!session || !scope || !["auto", "read", "unread"].includes(value))
       return;
-    save(session, (state) =>
-      changeMode(session.index, state, scope, value as ReadingMode),
-    );
+    const mode = value as ReadingMode;
+    save(session, (previous) => {
+      const state = changeMode(session.index, previous, scope, mode);
+      if (sameModes(previous, state)) return { state: previous };
+      return { state, events: [{ kind: "mode", scopeId: scope, mode }] };
+    });
   }
 
   controls.bookMode.addEventListener(

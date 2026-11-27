@@ -52,6 +52,48 @@
             Demander le stockage persistant
           </button>
         </details>
+        <details id="drive-panel" class="storage-settings" hidden>
+          <summary>Google Drive</summary>
+          <p>Le stockage local conserve vos ouvrages et votre progression.</p>
+          <p id="drive-status" role="status">Google Drive déconnecté.</p>
+          <div class="actions">
+            <button type="button" id="drive-load" hidden>
+              Préparer la connexion Google
+            </button>
+            <button type="button" id="drive-connect" disabled>
+              Connecter Google Drive
+            </button>
+            <button type="button" id="drive-disconnect" hidden>
+              Déconnecter Google Drive
+            </button>
+            <button type="button" id="drive-cancel" hidden>Annuler</button>
+          </div>
+          <div id="drive-library" hidden>
+            <p>
+              Le premier échange associe ce profil au compte Google connecté.
+              Synchroniser envoie l’ouvrage choisi et sa progression, puis suit
+              ses prochaines modifications.
+            </p>
+            <div class="actions">
+              <label for="drive-local-book">Ouvrage sur cet appareil</label>
+              <select id="drive-local-book">
+                <option value="">Choisir un ouvrage</option>
+              </select>
+              <button type="button" id="drive-sync" disabled>
+                Synchroniser l’ouvrage choisi
+              </button>
+            </div>
+            <p id="drive-local-error" role="status"></p>
+            <h3>Ouvrages sur Drive</h3>
+            <button type="button" id="drive-refresh">
+              Actualiser la liste
+            </button>
+            <p id="drive-remote-empty" hidden>
+              Aucun ouvrage sur ce compte Drive.
+            </p>
+            <ul id="drive-remote-books"></ul>
+          </div>
+        </details>
       </section>
       <section id="reader" class="reader" aria-labelledby="reader-title" hidden>
         <div id="reader-toolbar" class="reader-toolbar">

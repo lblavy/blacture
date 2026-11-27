@@ -2,6 +2,7 @@ import "./styles.css";
 import { startImportScreen } from "./import-screen";
 import { startInstallSupport } from "./install-support";
 import { startReader } from "./reader";
+import type { startDriveController } from "./sync/drive-controller";
 import { registerOfflineWorker } from "./worker-client";
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -9,6 +10,10 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
   if (!node) throw new Error(`Élément absent : ${id}`);
   return node as T;
 }
+
+let drive: ReturnType<typeof startDriveController> | undefined;
+let driveLoading:
+  Promise<ReturnType<typeof startDriveController> | undefined> | undefined;
 
 const catalog = startImportScreen(
   {
@@ -24,6 +29,9 @@ const catalog = startImportScreen(
   {
     open: (entry) => reader.open(entry),
     resume: (entry, kind) => reader.resume(entry, kind),
+    changed: () => {
+      void drive?.refreshLocal();
+    },
   },
 );
 
@@ -56,6 +64,26 @@ const reader = startReader(
 );
 
 if (import.meta.env.PROD) {
+  const driveClient = import.meta.env.VITE_DRIVE_CLIENT_ID as
+    string | undefined;
+  if (driveClient) {
+    const panel = element<HTMLDetailsElement>("drive-panel");
+    panel.hidden = false;
+    panel.addEventListener("toggle", () => {
+      if (!panel.open || driveLoading) return;
+      driveLoading = import("./sync/drive-controller")
+        .then(({ startDriveController }) => {
+          drive = startDriveController(panel, driveClient, catalog.refresh);
+          return drive;
+        })
+        .catch(() => {
+          driveLoading = undefined;
+          element("drive-status").textContent =
+            "Impossible de charger la synchronisation Google Drive.";
+          return undefined;
+        });
+    });
+  }
   startInstallSupport({
     installButton: element<HTMLButtonElement>("install-app"),
     installStatus: element("install-status"),
@@ -67,15 +95,18 @@ if (import.meta.env.PROD) {
     preparation ??= Promise.allSettled([
       catalog.prepareUpdate(),
       reader.prepareUpdate(),
-    ]).then(([catalogResult, readerResult]) => {
+      driveLoading?.then((controller) => controller?.settleForUpdate()),
+    ]).then(([catalogResult, readerResult, driveResult]) => {
       function release() {
         preparation = undefined;
         catalog.resumeAfterUpdate();
         if (readerResult.status === "fulfilled") readerResult.value();
+        if (driveResult.status === "fulfilled") driveResult.value?.();
       }
-      const outcome =
-        catalogResult.status === "rejected" ? catalogResult : readerResult;
-      if (outcome.status === "rejected") {
+      const outcome = [catalogResult, readerResult, driveResult].find(
+        (result) => result.status === "rejected",
+      );
+      if (outcome) {
         release();
         throw outcome.reason;
       }

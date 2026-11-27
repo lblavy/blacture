@@ -14,6 +14,7 @@ Le Tech Lead conserve les statuts (`À faire`, `En cours`, `En validation`, `Blo
 | B05 — Distribution locale | M | Moyenne | Moyen |
 | B06 — Synchronisation complète | L | Élevée | Élevé |
 | B07 — Récupération et stabilisation | L | Élevée | Élevé |
+| B08 — Interface et expérience de lecture | L | Moyenne | Moyen |
 
 ## B00 — Faisabilité et choix techniques
 **Statut : Terminé.** Le propriétaire a validé les choix, intégrés dans les documents de référence.
@@ -285,13 +286,27 @@ Le contrôle Q07 supplémentaire arrête brutalement le seul processus Chrome is
 Les variantes d’attributs mêlant emphase ou autres nœuds Markdown à une ligne de délimitation restent hors du sous-ensemble. Dans une imbrication, elles peuvent influer sur le rattachement du style. Les 7 régressions dédiées et les 15 parcours Chrome passent. `npm.cmd run quality` confirme 97,40 % des lignes, 89,22 % des branches et zéro clone.
 
 ## B06 — Synchronisation Google Drive (F11/F12, Q08–Q10/Q12/Q13)
-**Statut : À faire, après B01a, B04 et B05.**
+**Statut : Terminé pour le périmètre validé.** Le propriétaire a confirmé l’échange réel dans les deux sens entre Windows et Android avec un ouvrage fictif et un même compte Drive. Il a décidé de reporter le test sur un second compte et de poursuivre avec B07.
 
 - Confirmer la structure des fichiers Drive. Vérifier le renouvellement des autorisations, tester un second compte et préparer OAuth Production. Les opérations de compte sont effectuées par le propriétaire. Valider la fusion et les conflits (position, correction, suppression, version), en particulier entre appareils hors ligne.
 - Synchroniser ouvrages et ressources séparément des données de lecture ; télécharger ouvrages, gérer files d’attente, reconnexion, intégrité et changement de compte. Afficher clairement l’enregistrement local et l’état effectivement synchronisé. Tester d'abord avec transport simulé, puis réel.
 - Revue sécurité ciblée, tests de convergence, de rejouabilité et d'interruption, test avec deux appareils/profils isolés et Drive réel.
 
 **Acceptation :** importer une fois puis récupérer sur second appareil, lire 30 et 35 hors ligne, retrouver les deux états après sync, préserver corrections et positions selon règles ; aucun retransfert complet lors d'une simple progression. OAuth vérifié sur les deux plateformes et données locales disponibles même sans Drive.
+
+**Premier lot, transport simulé.** Deux répliques qui lisent séparément les chapitres 30 et 35 convergent malgré des lots réordonnés ou rejoués. La fusion utilise les règles de progression B04 et conserve la distinction entre dernière consultation et premier passage non lu. La proposition d’ordre logique départage les événements simultanés par identifiant d’appareil. Deux charges utiles divergentes portant la même identité sont signalées. Un lot JSON tronqué, trop volumineux ou associé à une autre édition ou à un autre index de lecture est rejeté avant projection.
+
+**Contrôles du lot.** 33 tests ciblés, dont quatre scénarios d’intégration indépendants sur lots JSON. `npm.cmd run quality` passe avec 217 tests, 97,54 % des lignes, 89,74 % des branches et zéro clone. Le moteur de fusion et le décodeur couvrent 100 % des lignes. La contre-revue confirme le rejet d’un index différent à clé d’édition identique.
+
+**Candidat raccordé.** IndexedDB v4 enregistre l’état de lecture et le journal dans la même transaction, y compris l’initialisation depuis B04. Le candidat sépare paquets d’édition, images et lots de progression dans Drive. Il vérifie les paquets, les images, l’identité du compte et les confirmations de transfert avant application. Le choix d’un ouvrage autorise son envoi et le suivi de ses modifications de lecture. Télécharger récupère contenu et progression. Une différence de rendu pour une même édition et une horloge distante aberrante laissent l’état local intact. Les fichiers confirmés puis supprimés de Drive demandent une décision de récupération. Le candidat conserve les copies locales.
+
+**Vérifications.** `npm.cmd run quality` passe avec 305 tests, 92,41 % des lignes, 86,35 % des branches et zéro clone. Les 16 scénarios Chrome passent. Le scénario B06 traverse l’interface, IndexedDB, le worker de validation et un Drive simulé dans deux profils. Il transfère l’ouvrage, reprend un lot après réautorisation et retrouve les corrections sur les deux profils. La QA indépendante a aussi vérifié la reprise après perte d’un accusé, l’image corrompue et le refus d’un compte obsolète dans un autre onglet. La revue sécurité et sa contre-revue ont vérifié l’opt-in, les bornes de transfert, l’horloge et le traitement des fichiers absents.
+
+**Corpus local.** Les trois Markdown privés de 5,73, 32,94 et 83,16 Mo ont été traités en lecture seule. Les paquets reconstitués se réencodent à l’identique. Pour le plus gros ouvrage, le paquet JSON occupe 63,70 Mo et les 1 992 images 38,64 Mo. La validation locale du paquet et de ses images a pris environ 16 s sous Node Windows avec d’autres contrôles en cours. Le transfert de ce volume et les temps sur téléphone restent à mesurer. Les nombreuses ressources distinctes peuvent allonger le premier envoi réel.
+
+**Essai réel confirmé par le propriétaire.** Après publication du ZIP `work/b06-release/blacture-b06-drive.zip` (11 fichiers statiques et 299 070 octets), le propriétaire a connecté le client Web existant en Testing à l’origine canonique. Depuis Windows, il a importé `belvederes.md`, marqué une section comme lue et synchronisé l’ouvrage. Sur Android, le même compte a récupéré l’ouvrage et l’état de cette section. Une seconde section marquée comme lue hors ligne sur Android a été synchronisée à la reconnexion. Après synchronisation sous Windows, le propriétaire a retrouvé les deux sections lues.
+
+**Contrôles reportés.** L’essai réel d’un second compte se fera dans un profil distinct quand le propriétaire disposera d’un compte de test. Le contrôle automatisé de refus d’un compte obsolète a réussi. Le passage d’OAuth en Production constitue une décision distincte de diffusion. La récupération après suppression distante et la migration des éditions relèvent de B07. Le renouvellement du jeton a été testé sur Drive réel pour le témoin B01a et sur le Drive simulé de B06. Les mesures de transfert des gros ouvrages et la relance de Blacture hors ligne depuis l’icône Windows du profil courant restent à couvrir. Le projet utilise le [niveau Standard de l’API Drive](https://developers.google.com/workspace/drive/api/guides/quotas). Seul le propriétaire réalise les opérations sur ses comptes et appareils.
 
 ## B07 — Éditions, récupération et stabilisation (F03/F14, Q11/Q13)
 **Statut : À faire ; dépend de B02/B06.**
@@ -303,6 +318,16 @@ Les variantes d’attributs mêlant emphase ou autres nœuds Markdown à une lig
 - Mettre à jour guide d'utilisation et de développement ; inventorier limites restantes.
 
 **Acceptation :** lecteur utilisable quotidiennement, conservation des données vérifiée, résultats de qualité et performance consignés, installation documentée. Aucune promesse de publication.
+
+## B08 — Interface et expérience de lecture sur Windows et Android
+
+**Statut : À faire après B06 et B07.** Le propriétaire souhaite un jalon dédié à l’interface vers la fin du projet. Les parcours à améliorer sont ci-dessous. Leur conception sera validée à partir de maquettes et d’essais.
+
+- Reprendre la bibliothèque, l’import et les diagnostics, le lecteur, le sommaire, les renvois, les deux reprises de lecture et les réglages. Donner la priorité au texte et aux actions fréquentes sur petit écran.
+- Rendre explicites dans l’interface les états de disponibilité, d’enregistrement local, de synchronisation et de récupération. Concevoir ensemble les états vides, en cours et en erreur.
+- Vérifier la lisibilité du français et des caractères chinois, la hiérarchie visuelle, le contraste, la navigation clavier et le focus sous Windows, ainsi que les cibles tactiles et le défilement sur Android.
+
+**Acceptation.** Le propriétaire valide la direction visuelle. Un checkpoint groupé sur Windows et Android vérifie qu’on peut importer un ouvrage, retrouver un passage et une note, reprendre la lecture hors ligne et comprendre les états de stockage et de synchronisation. Les régressions fonctionnelles restent couvertes par les tests existants.
 
 ## À arbitrer ultérieurement (pas d'implémentation automatique)
 

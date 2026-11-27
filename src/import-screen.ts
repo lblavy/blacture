@@ -17,6 +17,7 @@ interface ImportControls {
 interface LibraryActions {
   open: (entry: CatalogEntry) => Promise<void>;
   resume: (entry: CatalogEntry, kind: ResumeKind) => Promise<void>;
+  changed?: () => void;
 }
 
 const stageText: Record<ImportStage, string> = {
@@ -136,6 +137,7 @@ export function startImportScreen(
       (sameAction ?? candidates[0])?.focus();
     }
     performance.measure("catalog-open", { start });
+    actions.changed?.();
   }
 
   function updateControls() {

@@ -1,4 +1,4 @@
-const maxImageBytes = 16 * 1024 * 1024;
+export const maxImageBytes = 16 * 1024 * 1024;
 const maxPixels = 25_000_000;
 type RasterMime = "image/png" | "image/jpeg" | "image/webp";
 
@@ -20,15 +20,29 @@ export function readRaster(
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < bytes.length; index += 1)
     bytes[index] = binary.charCodeAt(index);
-  if (!hasReasonableDimensions(mimeType, bytes)) return;
+  if (!validateRasterBytes(mimeType, bytes)) return;
   return { mimeType, bytes };
+}
+
+export function isRasterMime(mimeType: unknown): mimeType is RasterMime {
+  return typeof mimeType === "string" && Object.hasOwn(readers, mimeType);
+}
+
+export function validateRasterBytes(
+  mimeType: RasterMime,
+  bytes: Uint8Array<ArrayBuffer>,
+): boolean {
+  return (
+    bytes.byteLength <= maxImageBytes &&
+    hasReasonableDimensions(mimeType, bytes)
+  );
 }
 
 function hasReasonableDimensions(
   mimeType: RasterMime,
   bytes: Uint8Array<ArrayBuffer>,
 ): boolean {
-  const view = new DataView(bytes.buffer);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const dimensions = readers[mimeType](view);
   if (!dimensions) return false;
   const [width, height] = dimensions;
