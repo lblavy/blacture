@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportedBook } from "../src/import";
 import { startReader } from "../src/reader";
+import * as readingObserver from "../src/reader/reading-observer";
 import * as storage from "../src/storage";
 import { readFontSize, saveEdition, saveFontSize } from "../src/storage";
 
@@ -471,5 +472,92 @@ describe("lecteur local", () => {
     expect(controls.panel.hidden).toBe(true);
     expect(controls.contents.textContent).toBe("");
     expect(location.hash).toBe("");
+  });
+
+  it("enregistre la préférence et la correction avant un changement de version", async () => {
+    stubBlobUrls();
+    const book = sample();
+    for (const fragment of book.fragments) {
+      fragment.blockIds = [fragment.id];
+      fragment.html = fragment.html.replace(
+        "<p>",
+        `<p data-block-id="${fragment.id}">`,
+      );
+    }
+    const entry = await saveEdition(book);
+    const controls = makeControls();
+    for (const mode of ["auto", "read", "unread"])
+      controls.progress.bookMode.add(new Option(mode, mode));
+    reader = startReader(controls);
+    await reader.open(entry);
+    await vi.waitFor(() =>
+      expect(controls.progress.bookMode.disabled).toBe(false),
+    );
+    controls.progress.bookMode.value = "read";
+    controls.progress.bookMode.dispatchEvent(new Event("change"));
+    controls.fontSize.value = "large";
+    controls.fontSize.dispatchEvent(new Event("change"));
+    const release = await reader.prepareUpdate();
+    expect(controls.panel.inert).toBe(true);
+    expect(await readFontSize()).toBe("large");
+    release();
+    expect(controls.panel.inert).toBe(false);
+    expect(controls.progress.bookMode.disabled).toBe(false);
+    expect(controls.progress.bookState.textContent).toContain("Terminé");
+  });
+
+  it("reprend au dernier bloc observé après un rechargement de version", async () => {
+    const book = await import("../src/import").then(({ importMarkdown }) =>
+      importMarkdown("# Chapitre\n\nPremier passage.\n\nSecond passage."),
+    );
+    const entry = await saveEdition(book);
+    const watch = vi
+      .spyOn(readingObserver, "watchReading")
+      .mockImplementation((_contents, _toolbar, units, onSample) => {
+        const second = units.at(-1)!;
+        onSample({ id: second.id, elapsedMs: 0, coverage: 0 });
+        return () => {};
+      });
+    try {
+      const controls = makeControls();
+      reader = startReader(controls);
+      await reader.open(entry);
+      await vi.waitFor(() => expect(watch).toHaveBeenCalledOnce());
+      await reader.prepareUpdate();
+      expect(location.hash).not.toContain("block=");
+      reader.preservePositionForReload();
+      const position = await storage.readProgress(entry.key);
+      expect(position.last?.blockId).toBeDefined();
+      expect(
+        new URLSearchParams(location.hash.split("?")[1]).get("block"),
+      ).toBe(position.last?.blockId);
+      const otherRoute = `#lecture?book=${encodeURIComponent(entry.key)}&fragment=autre`;
+      history.replaceState(null, "", otherRoute);
+      reader.preservePositionForReload();
+      expect(location.hash).toBe(otherRoute);
+    } finally {
+      watch.mockRestore();
+    }
+  });
+
+  it("rétablit le lecteur si une préférence en cours échoue pendant la préparation", async () => {
+    const controls = makeControls();
+    reader = startReader(controls);
+    const savePreference = vi
+      .spyOn(storage, "saveFontSize")
+      .mockRejectedValueOnce(
+        new DOMException("Disque plein", "QuotaExceededError"),
+      );
+    try {
+      controls.fontSize.value = "large";
+      controls.fontSize.dispatchEvent(new Event("change"));
+      await expect(reader.prepareUpdate()).rejects.toThrow(/taille du texte/);
+      expect(controls.status.textContent).toContain("Impossible d’enregistrer");
+      expect(controls.panel.inert).toBe(false);
+      const retry = await reader.prepareUpdate();
+      retry();
+    } finally {
+      savePreference.mockRestore();
+    }
   });
 });

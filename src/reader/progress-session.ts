@@ -85,7 +85,9 @@ export function createProgressSession(
   let ready: BookProgress | undefined;
   let loading: { key: string; controller: AbortController } | undefined;
   let unwatch: (() => void) | undefined;
+  let suspended = false;
   let writes = Promise.resolve();
+  let failedWrites = 0;
 
   function applySummary(session: BookProgress, passage: Passage) {
     setText(controls.bookState, progressLabel(session.summary.book));
@@ -138,6 +140,7 @@ export function createProgressSession(
         }
       })
       .catch(() => {
+        failedWrites++;
         if (ready === session)
           controls.error.textContent =
             "Impossible d’enregistrer la progression locale.";
@@ -170,13 +173,7 @@ export function createProgressSession(
     });
   }
 
-  function activate(session: BookProgress, passage: Passage) {
-    applySummary(session, passage);
-    save(
-      session,
-      (state) => setLastConsultation(session.index, state, passage.position),
-      true,
-    );
+  function watchPassage(session: BookProgress, passage: Passage) {
     const units = session.index.fragments[passage.position.fragmentId] ?? [];
     if (units.length > 0) {
       unwatch = watchReading(
@@ -186,6 +183,17 @@ export function createProgressSession(
         (sample) => observe(session, passage, sample),
       );
     }
+  }
+
+  function activate(session: BookProgress, passage: Passage) {
+    if (suspended) return;
+    applySummary(session, passage);
+    save(
+      session,
+      (state) => setLastConsultation(session.index, state, passage.position),
+      true,
+    );
+    watchPassage(session, passage);
   }
 
   function rememberWhileIndexing(passage: Passage) {
@@ -204,6 +212,7 @@ export function createProgressSession(
         });
       })
       .catch(() => {
+        failedWrites++;
         if (current?.key === passage.key)
           setText(
             controls.error,
@@ -313,9 +322,24 @@ export function createProgressSession(
   return {
     show,
     pause,
+    suspend() {
+      const wasReady = ready;
+      suspended = true;
+      unwatch?.();
+      unwatch = undefined;
+      return () => {
+        suspended = false;
+        if (!current || ready?.key !== current.key) return;
+        if (ready === wasReady) watchPassage(ready, current);
+        else activate(ready, current);
+      };
+    },
     close,
     resume,
     settled: () => writes,
+    get failedWrites() {
+      return failedWrites;
+    },
     dispose() {
       listeners.abort();
       close();

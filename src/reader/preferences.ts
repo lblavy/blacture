@@ -11,6 +11,8 @@ export function applyFontPreference(
   status: HTMLElement,
 ) {
   let revision = 0;
+  let writing = Promise.resolve();
+  let failedWrites = 0;
   function apply(size: FontSize) {
     select.value = size;
     contents.dataset.fontSize = size;
@@ -30,9 +32,18 @@ export function applyFontPreference(
     if (!isFontSize(size)) return;
     const latest = ++revision;
     apply(size);
-    void saveFontSize(size).catch(() => {
-      if (latest === revision)
-        status.textContent = "Impossible d’enregistrer la taille du texte.";
-    });
+    writing = writing
+      .then(() => saveFontSize(size))
+      .catch(() => {
+        failedWrites++;
+        if (latest === revision)
+          status.textContent = "Impossible d’enregistrer la taille du texte.";
+      });
   });
+  return async () => {
+    const before = failedWrites;
+    await writing;
+    if (failedWrites !== before)
+      throw new Error("L’enregistrement de la taille du texte a échoué.");
+  };
 }

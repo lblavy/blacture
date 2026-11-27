@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified } from "unified";
+import { pandocContainers } from "./pandoc-containers";
 import { elements, stringProperty } from "./tree";
 import type { ReportDiagnostic } from "./types";
 
@@ -168,6 +169,7 @@ export function parseMarkdown(
     .use(remarkParse)
     .use(remarkGfm)
     .use(headingAttributes, source, report)
+    .use(pandocContainers, source, report)
     .use(remarkRehype, {
       allowDangerousHtml: true,
       clobberPrefix: "md-",

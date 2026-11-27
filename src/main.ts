@@ -1,5 +1,6 @@
 import "./styles.css";
 import { startImportScreen } from "./import-screen";
+import { startInstallSupport } from "./install-support";
 import { startReader } from "./reader";
 import { registerOfflineWorker } from "./worker-client";
 
@@ -55,8 +56,41 @@ const reader = startReader(
 );
 
 if (import.meta.env.PROD) {
+  startInstallSupport({
+    installButton: element<HTMLButtonElement>("install-app"),
+    installStatus: element("install-status"),
+    persistButton: element<HTMLButtonElement>("request-persistence"),
+    persistStatus: element("persistence-status"),
+  });
+  let preparation: Promise<() => void> | undefined;
+  function prepareUpdate() {
+    preparation ??= Promise.allSettled([
+      catalog.prepareUpdate(),
+      reader.prepareUpdate(),
+    ]).then(([catalogResult, readerResult]) => {
+      function release() {
+        preparation = undefined;
+        catalog.resumeAfterUpdate();
+        if (readerResult.status === "fulfilled") readerResult.value();
+      }
+      const outcome =
+        catalogResult.status === "rejected" ? catalogResult : readerResult;
+      if (outcome.status === "rejected") {
+        release();
+        throw outcome.reason;
+      }
+      return release;
+    });
+    return preparation;
+  }
   void registerOfflineWorker(
     element("offline-status"),
     element<HTMLButtonElement>("update"),
+    prepareUpdate,
+    undefined,
+    () => {
+      reader.preservePositionForReload();
+      window.location.reload();
+    },
   );
 }

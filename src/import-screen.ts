@@ -32,6 +32,8 @@ const diagnosticText = new Map([
   ["missing-resource", "Image absente ou non prise en charge"],
   ["presentation-simplified", "Mise en forme simplifiée"],
   ["unsupported-heading-attribute", "Attribut de titre non pris en charge"],
+  ["unmatched-container-marker", "Délimiteur de conteneur sans paire"],
+  ["unsupported-container-marker", "Syntaxe de conteneur non prise en charge"],
   ["unsupported-attribute", "Attribut non pris en charge"],
   ["unsupported-link", "Lien non pris en charge"],
   ["unsupported-markup", "Balise non prise en charge"],
@@ -52,6 +54,12 @@ function showDiagnostics(
   }
 }
 
+function importErrorMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === "QuotaExceededError")
+    return "Espace de stockage insuffisant pour importer cet ouvrage.";
+  return error instanceof Error ? error.message : "Import impossible.";
+}
+
 export function startImportScreen(
   controls: ImportControls,
   actions: LibraryActions,
@@ -60,6 +68,9 @@ export function startImportScreen(
   const { form, file, submit, cancel, status, diagnostics, catalog, empty } =
     controls;
   let active: AbortController | undefined;
+  let importing = Promise.resolve();
+  let updating = false;
+  let importFailed = false;
 
   function bookButton(entry: CatalogEntry, label: string, kind?: ResumeKind) {
     const button = document.createElement("button");
@@ -127,10 +138,12 @@ export function startImportScreen(
     performance.measure("catalog-open", { start });
   }
 
-  function updateControls(busy: boolean) {
-    submit.disabled = busy;
-    file.disabled = busy;
+  function updateControls() {
+    const busy = Boolean(active);
+    submit.disabled = busy || updating;
+    file.disabled = busy || updating;
     cancel.hidden = !busy;
+    catalog.inert = updating;
   }
 
   async function persistMarkdown(source: File, signal: AbortSignal) {
@@ -142,6 +155,7 @@ export function startImportScreen(
     showDiagnostics(diagnostics, book.diagnostics);
     performance.measure("import-analysis", { start });
     if (book.diagnostics.some(({ severity }) => severity === "error")) {
+      importFailed = true;
       status.textContent = "Import arrêté. Consulte les diagnostics.";
       return;
     }
@@ -151,30 +165,33 @@ export function startImportScreen(
     performance.measure("import-write", { start: writeStart });
     form.reset();
     status.textContent = "Import terminé.";
-    await refreshCatalog();
+    await refreshCatalog().catch(() => {
+      status.textContent =
+        "Import enregistré. Impossible de rafraîchir le catalogue.";
+    });
     performance.measure("import-total", { start });
   }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const selected = file.files?.item(0);
-    if (!selected || active) return;
+    if (!selected || active || updating) return;
     const controller = new AbortController();
     active = controller;
-    updateControls(true);
+    importFailed = false;
+    updateControls();
     showDiagnostics(diagnostics, []);
     status.textContent = "Préparation de l’import…";
-    void persistMarkdown(selected, controller.signal)
+    importing = persistMarkdown(selected, controller.signal)
       .catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : "Import impossible.";
+        importFailed = !controller.signal.aborted;
         status.textContent = controller.signal.aborted
           ? "Import annulé."
-          : message;
+          : importErrorMessage(error);
       })
       .finally(() => {
         active = undefined;
-        updateControls(false);
+        updateControls();
       });
   });
 
@@ -185,5 +202,19 @@ export function startImportScreen(
     });
   }
   refresh();
-  return { refresh };
+  return {
+    refresh,
+    async prepareUpdate() {
+      const waitingForImport = Boolean(active);
+      updating = true;
+      updateControls();
+      await importing;
+      if (waitingForImport && importFailed)
+        throw new Error("L’import en cours a échoué.");
+    },
+    resumeAfterUpdate() {
+      updating = false;
+      updateControls();
+    },
+  };
 }

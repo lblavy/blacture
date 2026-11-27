@@ -126,6 +126,15 @@ body {
   color: var(--muted);
 }
 
+.site-status p:empty {
+  display: none;
+}
+
+.storage-settings {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
 #import-form label {
   display: block;
   margin-bottom: 0.35rem;

@@ -260,13 +260,29 @@ Le poids dépend de la quantité de texte utile et une image seule reçoit un po
 **Qualité et contre-revue.** `npm.cmd run quality` passe avec 143 tests, 96,45 % des lignes, 88,09 % des branches et zéro clone. Le domaine de progression atteint 100 % des lignes. Gitleaks ne signale aucun secret. La contre-revue a confirmé l’exclusion des sommaires et notes identifiables, la correction du crédit des détails repliés et l’annulation d’une reprise devenue obsolète. Le contrôle Android réel reste regroupé au prochain checkpoint.
 
 ## B05 — Applications installables et hors ligne (F10, Q07/Q10/Q14)
-**Statut : Démarrage autorisé par le propriétaire.** La validation sur les appareils est prévue au prochain checkpoint groupé.
+**Statut : Terminé pour le périmètre fonctionnel.** Le build a été publié et vérifié sur l’origine canonique. La reprise hors ligne est vérifiée sur le téléphone Android et sur une installation Chrome isolée sous Windows. Le contrôle depuis l’icône Windows du profil courant est reporté au prochain checkpoint groupé.
 
 - Finaliser le build et le mode installé de la PWA, le stockage durable, le cycle de vie et la restauration de l’état.
 - Vérifier l’installation via Chrome, les changements de version et la continuité des données locales sur l’origine canonique.
 - Éprouver le parcours de lecture Playwright et sur la PWA installée sous Windows et sur téléphone Android réel. Documenter l’installation et les limites.
 
 **Acceptation :** la PWA s’installe sur les deux cibles, lit un ouvrage local et conserve la progression après redémarrage. Les tests système pertinents sont exécutés ou font l’objet d’une dérogation explicite. Les fonctions nécessitant un téléchargement distant seront validées en B06.
+
+**Candidat Windows.** Le test Chrome 158 dans un profil isolé installe la PWA, vérifie le mode autonome, ferme complètement Chrome, arrête le serveur local puis lance l’application depuis un nouveau processus. L’ouvrage, la dernière consultation, la correction manuelle et la taille du texte sont conservés hors ligne. Sur ce profil, la demande de persistance a fait passer `persisted()` de `false` à `true`. Les critères d’attribution restent propres au navigateur. Une mise à jour locale B04 → B05 sur l’application installée conserve les données. Une nouvelle révision synthétique du Service Worker B05 conserve aussi le bloc exact et lui redonne le focus. Preuves dans `work/b05-installed-qa/`.
+
+Le contrôle Q07 supplémentaire arrête brutalement le seul processus Chrome isolé après confirmation des écritures. La PWA redémarre hors ligne depuis ce profil et retrouve les mêmes données. La preuve couvre un arrêt du processus navigateur.
+
+**Qualité du candidat.** `npm.cmd run quality` passe avec 177 tests, 97,25 % des lignes, 88,73 % des branches et zéro clone. La suite Playwright compte 15 scénarios verts sur Chrome Windows. La contre-revue a vérifié la préservation de la position et la reprise après échec de préparation. Le correctif de concurrence entre fenêtres a un test de régression. L’audit npm et Gitleaks sont sans signalement. Le ZIP `work/b05-release/blacture-b05.zip` contient neuf ressources statiques avec les octets du build contrôlés après compression, soit 450 517 octets bruts et 141 618 octets compressés.
+
+**Publication du 27/11/2026.** Le propriétaire a publié le candidat sur Cloudflare Pages. Les huit ressources publiques de `https://blacture.blavy.eu/` ont les mêmes empreintes SHA-256 que le build local. HTTPS, types MIME, en-têtes de sécurité et `Cache-Control: no-cache` pour le Service Worker ont été vérifiés. Un profil Chrome 158 isolé a importé un Markdown fictif localement et retrouvé le dernier passage et la taille du texte après réouverture hors ligne.
+
+**Checkpoint groupé.** Le navigateur indique un stockage persistant activé sur les deux appareils. Sous Windows, la bibliothèque est initialement vide. L’import d’un ouvrage, la taille du texte et le marquage manuel d’une section comme lue fonctionnent. Le résultat de la relance hors ligne depuis l’icône Windows reste à documenter. Sous Android, les deux ouvrages déjà importés sont présents, la navigation et les changements de taille et d’état fonctionnent, et la lecture reprend hors ligne. Les catalogues de chaque appareil dépendent de leur stockage local. Leur rapprochement relève de B06.
+
+**Fidélité de l’import.** L’essai Windows a révélé un conteneur Markdown délimité affiché en texte, dans un premier fragment sans contenu à lire. Reproduit par import local du fichier exact de l’essai, 16 073 350 octets, distinct des copies de `samples/private/`. Les 5 simplifications de présentation signalent des arrière-plans CSS écartés. Les 92 attributs écartés appartiennent à la famille `data-*`. Ces avertissements sont indépendants du rendu des délimiteurs.
+
+**Correctif local après checkpoint.** L’import sur ce même fichier ouvre le contenu réel dès le premier fragment. Comparé au build publié, le correctif préserve l’ordre du texte hors délimiteurs et espaces, la hiérarchie des titres, les liens, les 15 948 destinations et les 697 ressources. Le plus gros fragment garde la même taille. La vérification locale ponctuelle mesure 6,4 s puis 7,7 s pour le moteur sous Node Windows. Ce relevé ne mesure pas le téléphone. Le filtre agrégé relève 24 occurrences résiduelles de délimiteurs, dont des marqueurs en contexte ambigu ou intégrés à des listes et citations. Deux marqueurs sans paire détectés sont signalés explicitement. Chrome a vérifié sur données synthétiques l’ouverture, le code littéral et un aller-retour de note avec restitution du focus.
+
+Les variantes d’attributs mêlant emphase ou autres nœuds Markdown à une ligne de délimitation restent hors du sous-ensemble. Dans une imbrication, elles peuvent influer sur le rattachement du style. Les 7 régressions dédiées et les 15 parcours Chrome passent. `npm.cmd run quality` confirme 97,40 % des lignes, 89,22 % des branches et zéro clone.
 
 ## B06 — Synchronisation Google Drive (F11/F12, Q08–Q10/Q12/Q13)
 **Statut : À faire, après B01a, B04 et B05.**
@@ -281,6 +297,7 @@ Le poids dépend de la quantité de texte utile et une image seule reçoit un po
 **Statut : À faire ; dépend de B02/B06.**
 
 - Valider la politique de nouvelle version, suppression, export/restauration et récupération après éviction, corruption ou désinstallation. Implémenter le minimum utile, avec confirmation et absence de perte silencieuse. Tester deux versions et reprise après panne.
+- Couvrir la reconstruction du rendu quand l’importeur corrige un défaut sur une source identique. Aujourd’hui, l’empreinte du Markdown déduplique la réimportation et garde l’édition déjà stockée. Préserver les corrections et les positions migrables avant de permettre un remplacement.
 - Tester les trois ouvrages DDJ complets et un ouvrage non DDJ, profils Windows/Android ; comparer les budgets de performance et corriger les régressions. Exécuter suite de validation et contrôles ciblés renforcés.
 - Regrouper les essais manuels de volumétrie. Inclure l’import direct de 83,16 Mo sur téléphone Android, reporté avec l’accord du propriétaire à la clôture de B02, et relever la durée, la mémoire observable et la réactivité.
 - Mettre à jour guide d'utilisation et de développement ; inventorier limites restantes.

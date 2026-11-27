@@ -106,6 +106,48 @@ it("cancels a busy import and leaves the saved catalogue intact", async () => {
   expect(controls.cancel.hidden).toBe(true);
 });
 
+it("lets the current import finish before an update and blocks new imports", async () => {
+  const { controls, services, submit, actions } = fixture();
+  let finishSave!: (result: typeof entry) => void;
+  services.saveEdition.mockReturnValueOnce(
+    new Promise<typeof entry>((resolve) => {
+      finishSave = resolve;
+    }),
+  );
+  const screen = startImportScreen(controls, actions, services);
+  submit();
+  await vi.waitFor(() => expect(services.saveEdition).toHaveBeenCalledOnce());
+  const prepared = vi.fn();
+  const preparation = screen.prepareUpdate().then(prepared);
+  await Promise.resolve();
+  expect(prepared).not.toHaveBeenCalled();
+  expect(controls.cancel.hidden).toBe(false);
+  finishSave(entry);
+  await preparation;
+  expect(controls.status.textContent).toBe("Import terminé.");
+  expect(controls.file.disabled).toBe(true);
+  expect(controls.catalog.inert).toBe(true);
+  submit();
+  expect(services.runImport).toHaveBeenCalledOnce();
+  screen.resumeAfterUpdate();
+  expect(controls.file.disabled).toBe(false);
+  expect(controls.catalog.inert).toBe(false);
+});
+
+it("keeps the current import error visible if its write fails during an update", async () => {
+  const { controls, services, submit, actions } = fixture();
+  services.saveEdition.mockRejectedValueOnce(
+    new DOMException("Disque plein", "QuotaExceededError"),
+  );
+  const screen = startImportScreen(controls, actions, services);
+  submit();
+  await expect(screen.prepareUpdate()).rejects.toThrow(/import/i);
+  expect(controls.status.textContent).toMatch(/Espace de stockage insuffisant/);
+  screen.resumeAfterUpdate();
+  expect(controls.file.disabled).toBe(false);
+  expect(await screen.prepareUpdate()).toBeUndefined();
+});
+
 it("reports errors opening the catalogue and starting an import", async () => {
   const { controls, services, submit, actions } = fixture();
   services.listBooks.mockRejectedValueOnce(new Error("Stockage indisponible"));

@@ -74,6 +74,32 @@ function changeMode(select: HTMLSelectElement, mode: string) {
   select.dispatchEvent(new Event("change"));
 }
 
+it("keeps the latest block when resuming after a cancelled application update", async () => {
+  const { entry, manifest } = await edition("Reprise après mise à jour");
+  const view = controls();
+  const session = createProgressSession(view, vi.fn());
+  try {
+    session.show({
+      key: entry.key,
+      manifest,
+      section: "first",
+      position: { fragmentId: "a" },
+    });
+    await vi.waitFor(() => expect(view.bookMode.disabled).toBe(false));
+    await session.settled();
+    const last = { fragmentId: "a", blockId: "a1" };
+    await storage.updateProgress(entry.key, (state) => ({
+      state: { ...state, last },
+    }));
+    const resume = session.suspend();
+    resume();
+    await session.settled();
+    expect(await storage.readProgress(entry.key)).toMatchObject({ last });
+  } finally {
+    session.dispose();
+  }
+});
+
 it("keeps forced choices and exact resume positions distinct in persisted state", async () => {
   const { entry, manifest } = await edition("Test reprise");
   const view = controls();

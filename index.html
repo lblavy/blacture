@@ -12,6 +12,10 @@
     <header class="site-header">
       <h1>Blacture</h1>
       <div class="site-status">
+        <button type="button" id="install-app" hidden>
+          Installer Blacture
+        </button>
+        <p id="install-status" role="status"></p>
         <p id="offline-status" role="status"></p>
         <button type="button" id="update" hidden>Mettre à jour</button>
       </div>
@@ -41,6 +45,13 @@
           <p id="import-status" role="status"></p>
           <ul id="import-diagnostics" hidden></ul>
         </section>
+        <details class="storage-settings">
+          <summary>Stockage local</summary>
+          <p id="persistence-status" role="status"></p>
+          <button type="button" id="request-persistence" hidden>
+            Demander le stockage persistant
+          </button>
+        </details>
       </section>
       <section id="reader" class="reader" aria-labelledby="reader-title" hidden>
         <div id="reader-toolbar" class="reader-toolbar">

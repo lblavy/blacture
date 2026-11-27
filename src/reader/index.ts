@@ -1,5 +1,11 @@
 import { createFragmentRenderer } from "../fragment-preview";
-import { readManifest, type CatalogEntry, type Manifest } from "../storage";
+import type { ReadingPosition } from "../domain/progress";
+import {
+  readManifest,
+  readProgress,
+  type CatalogEntry,
+  type Manifest,
+} from "../storage";
 import { createOutline } from "./outline";
 import { applyFontPreference } from "./preferences";
 import {
@@ -77,6 +83,7 @@ export function startReader(
   let trail: ReturnPoint[] = [];
   let focusBeforeReading: HTMLElement | undefined;
   let lastEntry: string | undefined;
+  let reloadPosition: ReadingPosition | undefined;
   let rendering: Promise<void> = Promise.resolve();
   const outline = createOutline(
     controls.outline,
@@ -230,6 +237,7 @@ export function startReader(
   }
 
   function synchronize() {
+    if (controls.panel.inert) return rendering;
     const hash = location.hash;
     const route = parseReaderRoute(hash);
     const nextTrail = route ? readReturnTrail(history.state, route.book) : [];
@@ -398,12 +406,71 @@ export function startReader(
     { signal: listeners.signal },
   );
   controls.heading.tabIndex = -1;
-  applyFontPreference(controls.fontSize, controls.contents, controls.status);
+  const preferencesSettled = applyFontPreference(
+    controls.fontSize,
+    controls.contents,
+    controls.status,
+  );
   void synchronize();
 
   return {
     open,
     resume,
+    preservePositionForReload() {
+      const hash = location.hash;
+      const route = parseReaderRoute(hash);
+      const last = reloadPosition;
+      if (
+        !route ||
+        route.book !== displayed?.book.key ||
+        last?.fragmentId !== displayed.fragment ||
+        hash + JSON.stringify(readReturnTrail(history.state, route.book)) !==
+          lastEntry
+      )
+        return;
+      history.replaceState(
+        history.state,
+        "",
+        readerHash({
+          book: route.book,
+          fragment: last.fragmentId,
+          ...(last.blockId ? { block: last.blockId } : {}),
+          ...(last.anchor ? { anchor: last.anchor } : {}),
+        }),
+      );
+    },
+    async prepareUpdate() {
+      const failuresBeforeUpdate = progress.failedWrites;
+      controls.panel.inert = true;
+      pendingResume?.abort();
+      let resumeProgress: (() => void) | undefined;
+      function release() {
+        controls.panel.inert = false;
+        reloadPosition = undefined;
+        resumeProgress?.();
+        void synchronize();
+      }
+      async function settleProgress() {
+        await rendering;
+        resumeProgress = progress.suspend();
+        await progress.settled();
+        if (progress.failedWrites !== failuresBeforeUpdate)
+          throw new Error("L’enregistrement de la progression a échoué.");
+        if (displayed)
+          reloadPosition = (await readProgress(displayed.book.key)).last;
+      }
+      const results = await Promise.allSettled([
+        settleProgress(),
+        preferencesSettled(),
+      ]);
+      for (const result of results) {
+        if (result.status === "rejected") {
+          release();
+          throw result.reason;
+        }
+      }
+      return release;
+    },
     dispose() {
       listeners.abort();
       request?.abort();

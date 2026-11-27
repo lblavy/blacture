@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 afterEach(() => vi.unstubAllGlobals());
 
 it("lie les événements au cache et attend la demande d’activation", async () => {
-  const addAll = vi.fn();
+  const put = vi.fn();
   const match = vi.fn().mockResolvedValue(new Response("cached"));
   const claim = vi.fn();
   const skipWaiting = vi.fn();
@@ -16,9 +16,18 @@ it("lie les événements au cache et attend la demande d’activation", async ()
   );
   vi.stubGlobal("registration", { scope: "https://example.test/" });
   vi.stubGlobal("caches", {
-    open: vi.fn().mockResolvedValue({ addAll, match }),
+    open: vi.fn().mockResolvedValue({ put, match }),
+    has: vi.fn().mockResolvedValue(false),
     keys: vi.fn().mockResolvedValue([]),
   });
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response("shell", { headers: { "content-type": "text/html" } }),
+      ),
+  );
   vi.stubGlobal("clients", { claim });
   vi.stubGlobal("skipWaiting", skipWaiting);
   vi.stubGlobal("__BLACTURE_CACHE_REVISION__", "1");
@@ -27,7 +36,7 @@ it("lie les événements au cache et attend la demande d’activation", async ()
   const waitUntil = vi.fn();
   callbacks.get("install")?.({ waitUntil });
   await waitUntil.mock.lastCall?.[0];
-  expect(addAll).toHaveBeenCalledOnce();
+  expect(put).toHaveBeenCalledOnce();
 
   callbacks.get("activate")?.({ waitUntil });
   await waitUntil.mock.lastCall?.[0];

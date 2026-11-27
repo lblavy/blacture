@@ -4,16 +4,37 @@ import { createOfflineCache } from "../src/offline-cache";
 const scope = "https://example.test/pwa/";
 const name = `blacture-pwa:${scope}:`;
 
-function setup(files = ["index.html", "assets/app.js", "verger.png"]) {
-  const cache = { addAll: vi.fn(), match: vi.fn() };
+function contentType(url: string) {
+  if (url.endsWith(".js")) return "application/javascript; charset=UTF-8";
+  if (url.endsWith(".css")) return "text/css";
+  if (url.endsWith(".webmanifest")) return "application/manifest+json";
+  return url.endsWith(".png") ? "image/png" : "text/html";
+}
+
+function setup(
+  files = [
+    "index.html",
+    "assets/app.js",
+    "assets/app.css",
+    "manifest.webmanifest",
+    "verger.png",
+  ],
+) {
+  const cache = { put: vi.fn(), match: vi.fn() };
   const storage = {
     open: vi.fn().mockResolvedValue(cache),
+    has: vi.fn().mockResolvedValue(false),
     keys: vi
       .fn()
       .mockResolvedValue([`${name}v1`, `${name}v2`, "outside-cache"]),
     delete: vi.fn(),
   };
-  const network = vi.fn();
+  const network = vi.fn().mockImplementation(
+    async (request: Request) =>
+      new Response("asset", {
+        headers: { "content-type": contentType(request.url) },
+      }),
+  );
   const offline = createOfflineCache(
     scope,
     "v2",
@@ -25,14 +46,78 @@ function setup(files = ["index.html", "assets/app.js", "verger.png"]) {
 }
 
 it("précache tous les fichiers dans la version propre au périmètre", async () => {
-  const { cache, storage, offline } = setup();
+  const { cache, storage, network, offline } = setup();
   await offline.install();
   expect(storage.open).toHaveBeenCalledWith(`${name}v2`);
-  const requests = cache.addAll.mock.calls[0]?.[0] as Request[];
+  const requests = network.mock.calls.map(([request]) => request as Request);
   expect(requests.map((request) => request.url)).toEqual(
-    ["", "assets/app.js", "verger.png"].map((file) => scope + file),
+    [
+      "",
+      "assets/app.js",
+      "assets/app.css",
+      "manifest.webmanifest",
+      "verger.png",
+    ].map((file) => scope + file),
   );
   expect(requests.every((request) => request.cache === "reload")).toBe(true);
+  expect(cache.put).toHaveBeenCalledTimes(5);
+});
+
+it.each([
+  ["assets/app.js", "text/html", 200],
+  ["assets/app.css", "text/html", 200],
+  ["manifest.webmanifest", "text/html", 200],
+  ["verger.png", "text/html", 200],
+  ["", "text/plain", 200],
+  ["assets/app.js", "application/javascript", 404],
+])(
+  "refuse la réponse invalide de %s et garde la version active",
+  async (file, type, status) => {
+    const { cache, storage, network, offline } = setup();
+    network.mockImplementation(async (request: Request) =>
+      request.url === scope + file
+        ? new Response("incorrect release", {
+            status,
+            headers: { "content-type": type },
+          })
+        : new Response("asset", {
+            headers: { "content-type": contentType(request.url) },
+          }),
+    );
+    await expect(offline.install()).rejects.toThrow();
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(storage.delete).toHaveBeenCalledExactlyOnceWith(`${name}v2`);
+  },
+);
+
+it.each(["application/manifest+json", "application/json"])(
+  "précache un manifest servi en %s",
+  async (type) => {
+    const { cache, network, offline } = setup(["manifest.webmanifest"]);
+    network.mockResolvedValue(
+      new Response("{}", { headers: { "content-type": type } }),
+    );
+    await offline.install();
+    expect(cache.put).toHaveBeenCalledOnce();
+  },
+);
+
+it("nettoie uniquement le nouveau cache lorsqu’une écriture échoue", async () => {
+  const { cache, storage, offline } = setup();
+  cache.put
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error("quota"));
+  await expect(offline.install()).rejects.toThrow("quota");
+  expect(storage.delete).toHaveBeenCalledExactlyOnceWith(`${name}v2`);
+});
+
+it("préserve une révision déjà présente si sa réinstallation échoue", async () => {
+  const { cache, storage, network, offline } = setup();
+  storage.has.mockResolvedValue(true);
+  network.mockRejectedValueOnce(new Error("réseau"));
+  await expect(offline.install()).rejects.toThrow("réseau");
+  expect(cache.put).not.toHaveBeenCalled();
+  expect(storage.delete).not.toHaveBeenCalled();
 });
 
 it("retire seulement les anciennes versions du même périmètre", async () => {

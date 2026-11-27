@@ -45,6 +45,7 @@ Préparer les parcours manuels sur un build éprouvé et les regrouper par check
 - Automatiser les parcours web critiques avec Playwright sur le Chrome installé, depuis les ressources de production servies en loopback. Couvrir import, diagnostics, annulation, persistance et relance hors ligne.
 - Compléter sur téléphone Android réel pour l’installation depuis Chrome, le sélecteur de fichier système et son annulation, le tactile, l’arrêt et le redémarrage. Conserver étapes, versions et preuve. Les temps mesurés sur émulateur restent séparés.
 - En B05, revérifier l’installation, une navigation hors ligne et la persistance des données métier après redémarrage sur les deux cibles. Les preuves du témoin B01 figurent dans le backlog. [Navigateurs Playwright](https://playwright.dev/docs/browsers)
+- Le test Windows B05 installe et relance la PWA via Chrome DevTools Protocol avec un profil isolé. Il vérifie le mode autonome, un nouveau processus Chrome, le serveur local arrêté et la conservation des données. Le lancement depuis l’icône système et le parcours Android réel restent au checkpoint. [Domaine PWA du protocole Chrome](https://chromedevtools.github.io/devtools-protocol/tot/PWA/)
 
 ## 4. Pyramide de tests
 
