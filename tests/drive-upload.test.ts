@@ -94,3 +94,48 @@ it("ne restaure pas silencieusement un fichier confirmé puis supprimé sur Driv
   expect(drive.startUpload).not.toHaveBeenCalled();
   expect(store.write).not.toHaveBeenCalled();
 });
+
+it.each(["predecessorHash", "sourceHash"] as const)(
+  "refuse le fichier confirmé si %s diffère",
+  async (property) => {
+    const { drive, store } = fixture({ id: file.id, finished: true });
+    const edition = { kind: "edition", editionHash: "a".repeat(64) } as const;
+    drive.metadata.mockResolvedValueOnce({
+      ...file,
+      ...edition,
+      [property]: "b".repeat(64),
+    });
+    await expect(
+      uploadDriveObject(
+        auth,
+        {
+          ...edition,
+          bytes,
+          [property]: "c".repeat(64),
+        },
+        store,
+        drive,
+      ),
+    ).rejects.toThrow(/incompatible/u);
+    expect(drive.download).not.toHaveBeenCalled();
+  },
+);
+
+it("réutilise une révision déjà publiée avant l’ajout de la métadonnée de lignée", async () => {
+  const { drive, store } = fixture({ id: file.id, finished: true });
+  const edition = { kind: "edition", editionHash: "a".repeat(64) } as const;
+  const remote = { ...file, ...edition };
+  const predecessorHash = "b".repeat(64);
+  drive.metadata.mockResolvedValueOnce(remote);
+  await expect(
+    uploadDriveObject(
+      auth,
+      { ...edition, bytes, predecessorHash },
+      store,
+      drive,
+    ),
+  ).resolves.toEqual({ ...remote, predecessorHash });
+  expect(drive.download).toHaveBeenCalledWith(auth, remote);
+  expect(drive.startUpload).not.toHaveBeenCalled();
+  expect(store.write).not.toHaveBeenCalled();
+});

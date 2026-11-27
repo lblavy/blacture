@@ -22,7 +22,7 @@ export interface EditionResourceDescriptor {
 }
 
 export interface EditionPackage {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   manifest: Manifest;
   fragments: ImportedFragment[];
   resources: EditionResourceDescriptor[];
@@ -110,6 +110,12 @@ function readManifest(value: unknown): Manifest {
     schemaVersion: 1,
     workId: identifier(m.workId),
     editionId: digest(m.editionId),
+    ...(m.sourceEditionId === undefined
+      ? {}
+      : { sourceEditionId: digest(m.sourceEditionId) }),
+    ...(m.replacesEditionId === undefined
+      ? {}
+      : { replacesEditionId: digest(m.replacesEditionId) }),
     title: text(m.title),
     sections: items(m.sections).map(readSection),
     destinations: Object.fromEntries(
@@ -148,6 +154,17 @@ function checkPackageLength(json: string) {
     throw new Error("Le paquet d’édition est trop volumineux.");
 }
 
+function packageVersion(manifest: Manifest): EditionPackage["schemaVersion"] {
+  if (!manifest.replacesEditionId && !manifest.sourceEditionId) return 1;
+  if (
+    !manifest.replacesEditionId ||
+    !manifest.sourceEditionId ||
+    manifest.replacesEditionId === manifest.editionId
+  )
+    invalidPackage();
+  return 2;
+}
+
 export function encodeEditionPackage(book: ImportedBook): string {
   const { fragments, resources, ...manifest } = book;
   const canonicalManifest = readManifest(manifest);
@@ -158,7 +175,7 @@ export function encodeEditionPackage(book: ImportedBook): string {
   );
   canonicalManifest.diagnostics.sort((a, b) => compareKeys(a.code, b.code));
   const pkg: EditionPackage = {
-    schemaVersion: 1,
+    schemaVersion: packageVersion(canonicalManifest),
     manifest: canonicalManifest,
     fragments: fragments.map(readFragment),
     resources: resources
@@ -346,8 +363,9 @@ export function decodeEditionPackage(
   expectedKey?: string,
 ): EditionPackage {
   const data = parsePackage(json);
-  if (data.schemaVersion !== 1) invalidPackage();
   const manifest = readManifest(data.manifest);
+  const schemaVersion = packageVersion(manifest);
+  if (data.schemaVersion !== schemaVersion) invalidPackage();
   if (
     expectedKey !== undefined &&
     JSON.stringify([manifest.workId, manifest.editionId]) !== expectedKey
@@ -367,7 +385,19 @@ export function decodeEditionPackage(
   };
   for (const fragment of fragments) validateFragment(fragment, validation);
   validateReferences(manifest, resourceIds, validation);
-  return { schemaVersion: 1, manifest, fragments, resources };
+  return { schemaVersion, manifest, fragments, resources };
+}
+
+export async function validateEditionResource(
+  { id, mimeType, size }: EditionResourceDescriptor,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<void> {
+  if (bytes.byteLength !== size)
+    throw new Error("Taille de ressource d’édition invalide.");
+  if ((await sha256(bytes)) !== id)
+    throw new Error("Empreinte de ressource d’édition invalide.");
+  if (!isRasterMime(mimeType) || !validateRasterBytes(mimeType, bytes))
+    throw new Error("Image du paquet d’édition invalide.");
 }
 
 export async function assembleEditionPackage(
@@ -378,15 +408,9 @@ export async function assembleEditionPackage(
 ): Promise<ImportedBook> {
   const resources: ImportedBook["resources"] = [];
   for (const descriptor of pkg.resources) {
-    const { id, mimeType, size } = descriptor;
     const bytes = await load(descriptor);
-    if (bytes.byteLength !== size)
-      throw new Error("Taille de ressource d’édition invalide.");
-    if ((await sha256(bytes)) !== id)
-      throw new Error("Empreinte de ressource d’édition invalide.");
-    if (!isRasterMime(mimeType) || !validateRasterBytes(mimeType, bytes))
-      throw new Error("Image du paquet d’édition invalide.");
-    resources.push({ id, mimeType, bytes });
+    await validateEditionResource(descriptor, bytes);
+    resources.push({ id: descriptor.id, mimeType: descriptor.mimeType, bytes });
   }
   return { ...pkg.manifest, fragments: pkg.fragments, resources };
 }

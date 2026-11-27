@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ReadingIndex } from "../src/domain/progress";
 import {
   fingerprintProgressIndex,
+  nextProgressBatch,
   projectProgressBatches,
 } from "../src/sync/progress-batches";
 
@@ -15,7 +16,7 @@ const edition = '["livre","edition"]';
 const event = {
   deviceId: "appareil-a",
   clock: 1,
-  kind: "observe",
+  kind: "observe" as const,
   samples: [{ unitId: "passage", elapsedMs: 2_000, coverage: 3 }],
 };
 
@@ -52,6 +53,70 @@ describe("lots de progression sérialisés", () => {
     });
   });
 
+  it("laisse les lots ordinaires en version 1 et écrit les migrations en version 2", async () => {
+    const migrated = { ...event, clock: 2, kind: "migrate" as const };
+    const cursor = { sentThrough: 0 };
+    const journal = { deviceId: event.deviceId, events: [event, migrated] };
+    const first = nextProgressBatch(edition, indexFingerprint, journal, {
+      ...cursor,
+      pendingThrough: 1,
+    });
+    const second = nextProgressBatch(
+      edition,
+      indexFingerprint,
+      journal,
+      cursor,
+    );
+    const decoder = new TextDecoder();
+    const recent = decoder.decode(second?.bytes);
+    expect(JSON.parse(decoder.decode(first?.bytes))).toMatchObject({
+      schemaVersion: 1,
+    });
+    expect(JSON.parse(recent)).toMatchObject({
+      schemaVersion: 2,
+      events: [event, migrated],
+    });
+    expect(
+      await projectProgressBatches(index, edition, [batch(), recent]),
+    ).toMatchObject({
+      observations: { passage: { elapsedMs: 4_000, coverage: 3 } },
+    });
+  });
+
+  it("utilise la version 2 pour une commande héritée sans observation migrée", async () => {
+    const inherited = {
+      kind: "mode" as const,
+      deviceId: event.deviceId,
+      clock: 6,
+      scopeId: "premier",
+      mode: "unread" as const,
+      inherited: true as const,
+    };
+    const encoded = nextProgressBatch(
+      edition,
+      indexFingerprint,
+      {
+        deviceId: event.deviceId,
+        events: [inherited],
+      },
+      { sentThrough: 0 },
+    );
+    const json = new TextDecoder().decode(encoded?.bytes);
+    expect(JSON.parse(json)).toMatchObject({
+      schemaVersion: 2,
+      events: [inherited],
+    });
+    const correction = {
+      ...inherited,
+      inherited: undefined,
+      clock: 1,
+      mode: "read",
+    };
+    await expect(
+      projectProgressBatches(index, edition, [json, batch([correction])]),
+    ).resolves.toMatchObject({ modes: { premier: "read" } });
+  });
+
   it("isole les éditions et refuse un événement attribué à un autre appareil", async () => {
     await expect(
       projectProgressBatches(index, edition, [
@@ -69,7 +134,31 @@ describe("lots de progression sérialisés", () => {
     "{",
     "null",
     "[]",
-    batch([event], { schemaVersion: 2 }),
+    batch([event], { schemaVersion: 3 }),
+    batch([{ ...event, kind: "migrate" }]),
+    batch([{ ...event, kind: "migrate", samples: [] }], { schemaVersion: 2 }),
+    batch([
+      {
+        ...event,
+        kind: "mode",
+        scopeId: "premier",
+        mode: "read",
+        inherited: true,
+      },
+    ]),
+    batch(
+      [
+        {
+          ...event,
+          kind: "mode",
+          scopeId: "premier",
+          mode: "read",
+          inherited: false,
+        },
+      ],
+      { schemaVersion: 2 },
+    ),
+    batch([{ ...event, inherited: true }], { schemaVersion: 2 }),
     batch([event], { deviceId: "" }),
     batch([event], { deviceId: "a".repeat(129) }),
     batch([]),

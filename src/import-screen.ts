@@ -1,7 +1,12 @@
 import type { ImportedBook, ImportStage } from "./import";
 import { runImport } from "./import-job";
 import { progressLabel, type ResumeKind } from "./reader/progress-session";
-import { listBooks, saveEdition, type CatalogEntry } from "./storage";
+import {
+  listBooks,
+  replaceEdition,
+  saveEdition,
+  type CatalogEntry,
+} from "./storage";
 
 interface ImportControls {
   form: HTMLFormElement;
@@ -61,17 +66,60 @@ function importErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Import impossible.";
 }
 
+function replacementMessage({
+  replaced,
+  omitted,
+}: {
+  replaced: boolean;
+  omitted: number;
+}) {
+  if (!replaced) return "Cette édition est déjà à jour.";
+  const completed =
+    "Ouvrage remplacé. L’édition précédente est disponible dans Sauvegarde locale.";
+  if (omitted === 1)
+    return `${completed} 1 élément du suivi reste dans la sauvegarde.`;
+  if (omitted > 1)
+    return `${completed} ${omitted} éléments du suivi restent dans la sauvegarde.`;
+  return completed;
+}
+
 export function startImportScreen(
   controls: ImportControls,
   actions: LibraryActions,
-  services = { runImport, listBooks, saveEdition },
+  services = { runImport, listBooks, saveEdition, replaceEdition },
 ) {
   const { form, file, submit, cancel, status, diagnostics, catalog, empty } =
     controls;
+  const replacement = form.querySelector<HTMLSelectElement>(
+    "#import-replacement",
+  )!;
+  const replacementField = form.querySelector<HTMLElement>(
+    "#import-replacement-field",
+  )!;
+  const previousNote = form.querySelector<HTMLElement>(
+    "#import-previous-note",
+  )!;
   let active: AbortController | undefined;
   let importing = Promise.resolve();
   let updating = false;
   let importFailed = false;
+
+  function refreshReplacements(entries: readonly CatalogEntry[]) {
+    const selected = replacement.value;
+    const options = entries.map(({ key, title, hasPreviousEdition }) => {
+      const option = new Option(title, key);
+      if (hasPreviousEdition) option.dataset.previous = "yes";
+      return option;
+    });
+    replacement.replaceChildren(
+      new Option("Ajouter à la bibliothèque", ""),
+      ...options,
+    );
+    if (options.some(({ value }) => value === selected))
+      replacement.value = selected;
+    replacementField.hidden = entries.length === 0;
+    updateControls();
+  }
 
   function bookButton(entry: CatalogEntry, label: string, kind?: ResumeKind) {
     const button = document.createElement("button");
@@ -120,6 +168,7 @@ export function startImportScreen(
   async function refreshCatalog() {
     const start = performance.now();
     const entries = await services.listBooks();
+    refreshReplacements(entries);
     const focused = document.activeElement;
     const previous =
       focused instanceof HTMLElement && catalog.contains(focused)
@@ -144,11 +193,19 @@ export function startImportScreen(
     const busy = Boolean(active);
     submit.disabled = busy || updating;
     file.disabled = busy || updating;
+    replacement.disabled = busy || updating;
+    previousNote.hidden =
+      replacement.selectedOptions[0]?.dataset.previous !== "yes";
+    submit.textContent = replacement.value ? "Remplacer l’ouvrage" : "Importer";
     cancel.hidden = !busy;
     catalog.inert = updating;
   }
 
-  async function persistMarkdown(source: File, signal: AbortSignal) {
+  async function persistMarkdown(
+    source: File,
+    target: string,
+    signal: AbortSignal,
+  ) {
     const start = performance.now();
     const book = await services.runImport(source, signal, (stage) => {
       status.textContent = stageText[stage];
@@ -163,10 +220,17 @@ export function startImportScreen(
     }
     status.textContent = "Enregistrement local…";
     const writeStart = performance.now();
-    await services.saveEdition(book, signal);
+    let result = "Import terminé.";
+    if (target) {
+      result = replacementMessage(
+        await services.replaceEdition(target, book, signal),
+      );
+    } else {
+      await services.saveEdition(book, signal);
+    }
     performance.measure("import-write", { start: writeStart });
     form.reset();
-    status.textContent = "Import terminé.";
+    status.textContent = result;
     await refreshCatalog().catch(() => {
       status.textContent =
         "Import enregistré. Impossible de rafraîchir le catalogue.";
@@ -184,7 +248,7 @@ export function startImportScreen(
     updateControls();
     showDiagnostics(diagnostics, []);
     status.textContent = "Préparation de l’import…";
-    importing = persistMarkdown(selected, controller.signal)
+    importing = persistMarkdown(selected, replacement.value, controller.signal)
       .catch((error: unknown) => {
         importFailed = !controller.signal.aborted;
         status.textContent = controller.signal.aborted
@@ -198,6 +262,7 @@ export function startImportScreen(
   });
 
   cancel.addEventListener("click", () => active?.abort());
+  replacement.addEventListener("change", updateControls);
   function refresh() {
     void refreshCatalog().catch(() => {
       status.textContent = "Impossible de lire le catalogue local.";

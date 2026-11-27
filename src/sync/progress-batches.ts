@@ -3,10 +3,12 @@ import {
   READING_TIME_MS,
   type ReadingIndex,
   type ReadingMode,
+  type ReadingObservation,
   type ReadingPosition,
   type ReadingSample,
 } from "../domain/progress";
 import {
+  isInheritedProgressEvent,
   mergeProgressEvents,
   type ProgressEvent,
 } from "../domain/progress-sync";
@@ -58,22 +60,29 @@ function positiveInteger(value: unknown, max: number): number {
   return number;
 }
 
+export function readProgressObservation(value: unknown): ReadingObservation {
+  const observation = record(value);
+  return {
+    elapsedMs: positiveNumber(observation.elapsedMs, READING_TIME_MS),
+    coverage: positiveInteger(observation.coverage, FULL_COVERAGE),
+  };
+}
+
 function readSample(value: unknown): ReadingSample {
   const sample = record(value);
   return {
     unitId: identifier(sample.unitId),
-    elapsedMs: positiveNumber(sample.elapsedMs, READING_TIME_MS),
-    coverage: positiveInteger(sample.coverage, FULL_COVERAGE),
+    ...readProgressObservation(sample),
   };
 }
 
-function readMode(value: unknown): ReadingMode {
+export function readProgressMode(value: unknown): ReadingMode {
   if (value !== "auto" && value !== "read" && value !== "unread")
     invalidBatch();
   return value;
 }
 
-function readPosition(value: unknown): ReadingPosition {
+export function readProgressPosition(value: unknown): ReadingPosition {
   const position = record(value);
   const result: ReadingPosition = {
     fragmentId: identifier(position.fragmentId),
@@ -85,15 +94,28 @@ function readPosition(value: unknown): ReadingPosition {
   return result;
 }
 
-function readEvent(value: unknown, deviceId: string): ProgressEvent {
+function inheritedFields(value: unknown): { inherited?: true } {
+  if (value === undefined) return {};
+  if (value !== true) invalidBatch();
+  return { inherited: true };
+}
+
+export function readProgressEvent(
+  value: unknown,
+  expectedDevice?: string,
+): ProgressEvent {
   const event = record(value);
-  if (event.deviceId !== deviceId) invalidBatch();
+  const deviceId = identifier(event.deviceId, maxDeviceIdLength);
+  if (expectedDevice !== undefined && deviceId !== expectedDevice)
+    invalidBatch();
   const stamp = {
     deviceId,
     clock: positiveInteger(event.clock, maxProgressClock),
   };
   switch (event.kind) {
     case "observe":
+    case "migrate":
+      if (event.inherited !== undefined) invalidBatch();
       return {
         ...stamp,
         kind: event.kind,
@@ -104,17 +126,23 @@ function readEvent(value: unknown, deviceId: string): ProgressEvent {
         ...stamp,
         kind: event.kind,
         scopeId: identifier(event.scopeId),
-        mode: readMode(event.mode),
+        mode: readProgressMode(event.mode),
+        ...inheritedFields(event.inherited),
       };
     case "visit":
       return {
         ...stamp,
         kind: event.kind,
-        position: readPosition(event.position),
+        position: readProgressPosition(event.position),
+        ...inheritedFields(event.inherited),
       };
     default:
       return invalidBatch();
   }
+}
+
+function requiresVersionTwo(event: ProgressEvent): boolean {
+  return event.kind === "migrate" || isInheritedProgressEvent(event);
 }
 
 function parseJson(json: string): unknown {
@@ -133,7 +161,7 @@ export function decodeProgressBatch(
   indexFingerprint: string,
 ): ProgressEvent[] {
   const batch = record(parseJson(json));
-  if (batch.schemaVersion !== 1) invalidBatch();
+  if (batch.schemaVersion !== 1 && batch.schemaVersion !== 2) invalidBatch();
   if (identifier(batch.editionKey) !== editionKey)
     throw new Error("Le lot de progression concerne une autre édition.");
   if (batch.indexFingerprint !== indexFingerprint)
@@ -141,9 +169,12 @@ export function decodeProgressBatch(
       "Le lot de progression utilise un index de lecture différent.",
     );
   const deviceId = identifier(batch.deviceId, maxDeviceIdLength);
-  return boundedItems(batch.events, maxEvents).map((event) =>
-    readEvent(event, deviceId),
+  const events = boundedItems(batch.events, maxEvents).map((event) =>
+    readProgressEvent(event, deviceId),
   );
+  if (batch.schemaVersion === 1 && events.some(requiresVersionTwo))
+    invalidBatch();
+  return events;
 }
 
 export interface ProgressCursor {
@@ -199,7 +230,8 @@ export function nextProgressBatch(
       );
     return undefined;
   }
-  const body = JSON.stringify({ ...header, events });
+  const schemaVersion = events.some(requiresVersionTwo) ? 2 : 1;
+  const body = JSON.stringify({ ...header, schemaVersion, events });
   return { through, bytes: new TextEncoder().encode(body) };
 }
 

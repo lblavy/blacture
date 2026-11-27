@@ -65,12 +65,16 @@ async function confirmExisting(
   cause?: Error,
 ): Promise<undefined> {
   const remote = await drive.metadata(auth, file.id);
+  const differentLineage = (["predecessorHash", "sourceHash"] as const).some(
+    (key) => remote[key] !== undefined && remote[key] !== file[key],
+  );
   if (
     remote.id !== file.id ||
     remote.kind !== file.kind ||
     remote.digest !== file.digest ||
     remote.size !== file.size ||
-    remote.editionHash !== file.editionHash
+    remote.editionHash !== file.editionHash ||
+    differentLineage
   )
     throw new Error("Le fichier Google Drive existant est incompatible.", {
       cause,
@@ -99,7 +103,10 @@ async function send(
 
 export async function uploadDriveObject(
   auth: DriveAuthorization,
-  source: Pick<DriveFile, "kind" | "editionHash" | "title"> & {
+  source: Pick<
+    DriveFile,
+    "kind" | "editionHash" | "predecessorHash" | "sourceHash" | "title"
+  > & {
     bytes: Uint8Array<ArrayBuffer>;
   },
   tickets: TransferStore,

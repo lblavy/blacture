@@ -309,7 +309,7 @@ Les variantes d’attributs mêlant emphase ou autres nœuds Markdown à une lig
 **Contrôles reportés.** L’essai réel d’un second compte se fera dans un profil distinct quand le propriétaire disposera d’un compte de test. Le contrôle automatisé de refus d’un compte obsolète a réussi. Le passage d’OAuth en Production constitue une décision distincte de diffusion. La récupération après suppression distante et la migration des éditions relèvent de B07. Le renouvellement du jeton a été testé sur Drive réel pour le témoin B01a et sur le Drive simulé de B06. Les mesures de transfert des gros ouvrages et la relance de Blacture hors ligne depuis l’icône Windows du profil courant restent à couvrir. Le projet utilise le [niveau Standard de l’API Drive](https://developers.google.com/workspace/drive/api/guides/quotas). Seul le propriétaire réalise les opérations sur ses comptes et appareils.
 
 ## B07 — Éditions, récupération et stabilisation (F03/F14, Q11/Q13)
-**Statut : À faire ; dépend de B02/B06.**
+**Statut : Terminé après le checkpoint Windows et Android.** L’export, la restauration, le remplacement, le retrait local et la synchronisation des révisions ont été vérifiés. L’essai du second compte reste reporté.
 
 - Valider la politique de nouvelle version, suppression, export/restauration et récupération après éviction, corruption ou désinstallation. Implémenter le minimum utile, avec confirmation et absence de perte silencieuse. Tester deux versions et reprise après panne.
 - Couvrir la reconstruction du rendu quand l’importeur corrige un défaut sur une source identique. Aujourd’hui, l’empreinte du Markdown déduplique la réimportation et garde l’édition déjà stockée. Préserver les corrections et les positions migrables avant de permettre un remplacement.
@@ -319,11 +319,50 @@ Les variantes d’attributs mêlant emphase ou autres nœuds Markdown à une lig
 
 **Acceptation :** lecteur utilisable quotidiennement, conservation des données vérifiée, résultats de qualité et performance consignés, installation documentée. Aucune promesse de publication.
 
+**Premier lot de récupération.** Depuis la bibliothèque, exporter une sauvegarde locale `.blacture` pour l’ouvrage choisi. L’archive conserve son contenu, ses images, sa progression et les événements locaux et reçus. La vérification contrôle les empreintes, les longueurs et le contenu éditorial depuis le fichier seul. La bibliothèque et les données Google Drive restent en dehors de cette opération. Le scénario Chrome indépendant vérifie le téléchargement hors ligne, l’inspection depuis un profil vide, le refus des octets altérés et la reprise des lectures dans le profil d’origine.
+
+**Contrôles.** `npm.cmd run quality` passe avec 393 tests, 93,33 % des lignes, 87,33 % des branches et zéro clone. Les 18 scénarios E2E Chrome passent. La revue et la QA indépendantes ont contrôlé le traitement des archives, la restauration hors ligne, le refus des références Drive incohérentes et l’adoption d’une révision dans deux profils Chrome. Le format d’édition partagé refuse certaines ancres dépassant 2 048 caractères.
+
+**Source identique, rendu différent.** Comparaison locale en lecture seule du même Markdown avant et après le correctif des conteneurs. L’empreinte de la source est identique. Les deux rendus partagent 2 880 sections, 2 880 fragments, 15 948 ancres et 25 718 des 28 711 identifiants de blocs d’origine. La migration s’appuie sur les correspondances fiables. Ces nombres décrivent le contenu, indépendamment des lectures du propriétaire.
+
+**Décision validée.** Remplacer l’édition dans la bibliothèque après confirmation de l’ouvrage ciblé. Migrer automatiquement le suivi dès que la correspondance est fiable. Donner un bilan global du suivi récupéré et conserver l’ancienne édition et son suivi dans une sauvegarde. La résolution des ambiguïtés passage par passage reste une option pour plus tard.
+
+**Restauration et remplacement.** La restauration vérifie le contenu et la progression et refuse d’écraser un ouvrage présent. Le retrait local confirmé permet ensuite de restaurer l’édition précédente depuis son fichier de sauvegarde. Le remplacement conserve le suivi fiable et laisse dans la sauvegarde les passages ambigus et les consultations sans position fiable. La sauvegarde locale précédente peut être exportée avant de la renouveler.
+
+**Google Drive.** Le transport simulé couvre le retrait suivi d’un nouveau téléchargement sur le même profil, la réémission d’une lecture restaurée, deux remplacements indépendants et l’adoption d’un successeur direct après confirmation. Les observations anciennes reprennent la durée maximale et réunissent la couverture. Les lectures nouvelles cumulent leurs événements distincts. Les fichiers Drive de l’édition précédente restent disponibles. Chaque appareil doit charger le candidat B07 avant de télécharger une révision.
+
+**Mesures Windows sur corpus privé en lecture seule.** Chrome 158 sur deux profils isolés, un passage par taille. Les trois dernières opérations sont hors ligne. Les journaux agrégés de `work/b07-volume/` ne contiennent aucun contenu d’ouvrage. Zéro requête externe interceptée.
+
+| Source | Import froid | Archive | Export | Vérification | Restauration |
+|---|---:|---:|---:|---:|---:|
+| 5,73 Mo | 2,94 s | 6,74 Mo | 0,41 s | 0,79 s | 1,21 s |
+| 32,94 Mo | 14,21 s | 40,27 Mo | 1,15 s | 4,47 s | 4,81 s |
+| 83,16 Mo | 66,33 s | 102,35 Mo | 1,89 s | 5,21 s | 12,39 s |
+
+Le pic de mémoire résidente agrégée des processus Chrome atteint 3 813 Mio pendant la restauration du grand ouvrage, avec le profil d’origine encore ouvert. Un remplacement hors ligne B07 vers B07 du Markdown de 32,94 Mo a pris 33,40 s, dont 6,02 s de préparation et d’écriture. Le catalogue a conservé une seule entrée. L’ancienne édition a été exportée en 1,56 s et restaurée dans un profil vierge en 3,89 s. Aucun accès non local intercepté et aucun suivi préalable dans cette mesure ponctuelle. La reprise avec progression et images est couverte par les scénarios Chrome synthétiques. Les mesures sur téléphone restent à effectuer.
+
+**Checkpoint groupé à effectuer par le propriétaire.** Le ZIP local `work/b07-checkpoint/blacture-b07.zip` contient 13 fichiers statiques (308 082 octets), avec le client Web public activé. Le propriétaire a publié le candidat. Le contrôle HTTPS public a retrouvé le bundle attendu `app-DSaKWbQa.js` sur l’origine habituelle. Restent la mise à jour des applications installées et le test du remplacement avec progression entre Windows et Android sur le jeu fictif préparé. Regrouper le test du grand Markdown sur Android et le contrôle hors ligne. L’essai du second compte reste reporté.
+
+**Checkpoint Windows, étape initiale.** Après connexion à Drive, le propriétaire confirme l’import de l’ouvrage fictif, le marquage du Pommier comme lu et la synchronisation de cette première édition. La réception sur Android et le remplacement restent à vérifier.
+
+**Checkpoint Android, première réception.** Le propriétaire confirme la récupération du Pommier lu depuis Windows et le marquage local de la Clairière. Cette lecture servira à vérifier la migration du suivi local lors de l’adoption de la révision.
+
+**Checkpoint Windows, remplacement.** Le propriétaire confirme le remplacement par le Markdown révisé, une seule entrée au catalogue, le Pommier toujours lu, la présence de la Mare et la synchronisation de la révision vers Drive.
+
+**Checkpoint Android et retour Windows.** Le propriétaire confirme l’adoption de la révision sur Android, les lectures du Pommier et de la Clairière et leur synchronisation. La Clairière est terminée à son retour sur Windows. Deux publications de la même source séparées par un remplacement intermédiaire ont ensuite fait apparaître deux libellés « édition mise à jour » dans la liste Drive.
+
+**Correction de la liste Drive.** Proposer l’édition à jour ou la prochaine édition à adopter pour la copie locale. Grouper les révisions issues du même Markdown pour un même ouvrage, y compris quand un intermédiaire n’a pas été synchronisé. Les ouvrages homonymes et les révisions concurrentes de sources distinctes restent identifiables. Le catalogue utilise les métadonnées de filiation ou leur lecture bornée dans les anciens paquets. Les fichiers historiques restent conservés. Réimporter une source et un rendu identiques ne crée plus de révision.
+
+**Candidat corrigé.** `work/b07-checkpoint/blacture-b07-correctif.zip` contient le build statique vérifié (13 entrées, 309 251 octets, bundle `app-C3gvNLLS.js`). Les 411 tests, les 18 scénarios Chrome et le scan Gitleaks passent. La couverture est de 93,44 % des lignes et 87,48 % des branches, avec zéro clone. Le contrôle HTTPS public a retrouvé le bundle corrigé. Le propriétaire confirme une seule entrée pour la révision dans la liste Drive existante sous Windows. Les anciens gros paquets dont le préfixe est indisponible restent affichés.
+
+**Clôture du 27 novembre 2026.** Le propriétaire a importé le Markdown de 83,16 Mo sur son téléphone Android lors du checkpoint hors ligne. Il relève un peu plus d’une minute d’analyse, quelques secondes d’enregistrement et 46 avertissements de mise en forme simplifiée, comme sur Windows. L’ouverture et la navigation sont rapides selon son retour. Pas de chronométrage instrumenté ni de mesure mémoire sur le téléphone. Le découpage visible en fragments nuit au confort de lecture et relève de B08. Les parcours Windows de sauvegarde et de restauration, le test Drive sur les deux appareils et la suite Chrome couvrent les autres critères de récupération.
+
 ## B08 — Interface et expérience de lecture sur Windows et Android
 
 **Statut : À faire après B06 et B07.** Le propriétaire souhaite un jalon dédié à l’interface vers la fin du projet. Les parcours à améliorer sont ci-dessous. Leur conception sera validée à partir de maquettes et d’essais.
 
 - Reprendre la bibliothèque, l’import et les diagnostics, le lecteur, le sommaire, les renvois, les deux reprises de lecture et les réglages. Donner la priorité au texte et aux actions fréquentes sur petit écran.
+- Afficher une barre de progression pendant l’import ou le remplacement d’un Markdown, avec l’étape en cours, l’annulation disponible et un état de fin ou d’erreur. Afficher un pourcentage lorsque l’avancement est mesurable et un indicateur indéterminé pendant les phases sans mesure fiable.
 - Rendre explicites dans l’interface les états de disponibilité, d’enregistrement local, de synchronisation et de récupération. Concevoir ensemble les états vides, en cours et en erreur.
 - Vérifier la lisibilité du français et des caractères chinois, la hiérarchie visuelle, le contraste, la navigation clavier et le focus sous Windows, ainsi que les cibles tactiles et le défilement sur Android.
 

@@ -44,6 +44,8 @@ export interface ImportedBook {
   schemaVersion: 1;
   workId: string;
   editionId: string;
+  sourceEditionId?: string;
+  replacesEditionId?: string;
   title: string;
   sections: ImportedSection[];
   fragments: ImportedFragment[];

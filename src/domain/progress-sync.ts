@@ -1,5 +1,7 @@
 import {
+  BOOK_SCOPE,
   EMPTY_PROGRESS,
+  FULL_COVERAGE,
   changeMode,
   observeReadings,
   setLastConsultation,
@@ -18,36 +20,101 @@ interface EventIdentity {
 export type ProgressEvent = EventIdentity &
   (
     | { readonly kind: "observe"; readonly samples: readonly ReadingSample[] }
+    | { readonly kind: "migrate"; readonly samples: readonly ReadingSample[] }
     | {
         readonly kind: "mode";
         readonly scopeId: string;
         readonly mode: ReadingMode;
+        readonly inherited?: true;
       }
-    | { readonly kind: "visit"; readonly position: ReadingPosition }
+    | {
+        readonly kind: "visit";
+        readonly position: ReadingPosition;
+        readonly inherited?: true;
+      }
   );
+
+export function isInheritedProgressEvent(event: ProgressEvent): boolean {
+  return (
+    (event.kind === "mode" || event.kind === "visit") &&
+    event.inherited === true
+  );
+}
+
+function mergeMigratedSample(
+  samples: Map<string, ReadingSample>,
+  sample: ReadingSample,
+) {
+  const { unitId, elapsedMs, coverage } = sample;
+  if (
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs <= 0 ||
+    !Number.isSafeInteger(coverage) ||
+    coverage < 1 ||
+    coverage > FULL_COVERAGE
+  )
+    return;
+  const previous = samples.get(unitId);
+  samples.set(
+    unitId,
+    previous
+      ? {
+          unitId,
+          elapsedMs: Math.max(previous.elapsedMs, elapsedMs),
+          coverage: previous.coverage | coverage,
+        }
+      : sample,
+  );
+}
+
+function inheritedState(
+  index: ReadingIndex,
+  journal: readonly ProgressEvent[],
+): ProgressState {
+  const candidates = new Map<string, ReadingMode>();
+  for (const event of journal) {
+    if (event.kind === "mode" && event.inherited)
+      candidates.set(event.scopeId, event.mode);
+  }
+  if (!candidates.size) return EMPTY_PROGRESS;
+
+  // Snapshot modes coexist by scope. Only explicit commands reset descendants.
+  const modes = new Map<string, ReadingMode>();
+  for (const id of [BOOK_SCOPE, ...index.sections.map(({ id }) => id)]) {
+    const mode = candidates.get(id);
+    if (mode !== undefined) modes.set(id, mode);
+  }
+  return { ...EMPTY_PROGRESS, modes: Object.fromEntries(modes) };
+}
 
 export function mergeProgressEvents(
   index: ReadingIndex,
   events: readonly ProgressEvent[],
 ): ProgressState {
-  let state = EMPTY_PROGRESS;
   const samples: ReadingSample[] = [];
+  const migrations = new Map<string, ReadingSample>();
   const journal = uniqueEvents(events).sort(compareEvents);
+  let state = inheritedState(index, journal);
   for (const event of journal) {
     switch (event.kind) {
       case "observe":
         for (const sample of event.samples) samples.push(sample);
         break;
+      case "migrate":
+        for (const sample of event.samples)
+          mergeMigratedSample(migrations, sample);
+        break;
       case "mode":
-        state = changeMode(index, state, event.scopeId, event.mode);
+        if (!event.inherited)
+          state = changeMode(index, state, event.scopeId, event.mode);
         break;
       case "visit":
         state = setLastConsultation(index, state, event.position);
         break;
     }
   }
-  // Observations are independent of corrections and consultation position.
-  return observeReadings(index, state, samples);
+  // Inherited durations may already include readings from another replica.
+  return observeReadings(index, state, [...migrations.values(), ...samples]);
 }
 
 function uniqueEvents(events: readonly ProgressEvent[]) {
@@ -66,16 +133,23 @@ function uniqueEvents(events: readonly ProgressEvent[]) {
 }
 
 function compareEvents(left: ProgressEvent, right: ProgressEvent) {
+  const inheritanceOrder =
+    Number(isInheritedProgressEvent(right)) -
+    Number(isInheritedProgressEvent(left));
+  if (inheritanceOrder) return inheritanceOrder;
   if (left.clock !== right.clock) return left.clock - right.clock;
   if (left.deviceId === right.deviceId) return 0;
   return left.deviceId < right.deviceId ? -1 : 1;
 }
 
 function samePayload(left: ProgressEvent, right: ProgressEvent): boolean {
+  if (isInheritedProgressEvent(left) !== isInheritedProgressEvent(right))
+    return false;
   switch (left.kind) {
     case "observe":
+    case "migrate":
       return (
-        right.kind === "observe" && sameSamples(left.samples, right.samples)
+        right.kind === left.kind && sameSamples(left.samples, right.samples)
       );
     case "mode":
       return (

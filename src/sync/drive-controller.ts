@@ -28,6 +28,14 @@ const knownErrors = new Map([
     "Une copie locale possède un autre rendu. Les copies sont conservées.",
   ],
   [
+    "Une autre édition de cet ouvrage est déjà présente dans la bibliothèque.",
+    "Une autre édition est présente sur cet appareil. Exportez-la et retirez-la depuis Sauvegarde locale pour télécharger celle de Drive.",
+  ],
+  [
+    "Remplacement annulé. L’édition locale est conservée.",
+    "Remplacement annulé. L’édition locale est conservée.",
+  ],
+  [
     "Le lot de progression utilise un index de lecture différent.",
     "Les passages de cette édition diffèrent entre appareils. La progression locale est conservée.",
   ],
@@ -170,7 +178,11 @@ export function startDriveController(
       }),
     download: (id, signal) =>
       run(signal, async (current) => {
-        await library.download(current, id);
+        await library.download(current, id, (title) =>
+          window.confirm(
+            `Remplacer « ${title} » par l’édition de Drive ? Blacture conservera la progression récupérable et une sauvegarde de l’édition qui sera remplacée. Pour garder une sauvegarde plus ancienne, exportez-la avant de continuer.`,
+          ),
+        );
         everBound = true;
         refreshCatalog();
         return {

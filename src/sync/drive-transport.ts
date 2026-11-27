@@ -6,6 +6,7 @@ const marker = "1";
 const fileFields = "id,name,size,trashed,appProperties";
 const binary = "application/octet-stream";
 const chunkSize = 8 * 1024 * 1024;
+const editionHeaderBytes = 16 * 1024;
 const maxFileBytes: Record<DriveFile["kind"], number> = {
   edition: 128 * 1024 * 1024,
   resource: 16 * 1024 * 1024,
@@ -23,6 +24,8 @@ export interface DriveFile {
   digest: string;
   size: number;
   editionHash?: string;
+  predecessorHash?: string;
+  sourceHash?: string;
   title?: string;
 }
 
@@ -60,7 +63,12 @@ function driveFile(
   kind: unknown,
   digest: unknown,
   size: number,
-  details: { editionHash?: unknown; title?: unknown } = {},
+  details: {
+    editionHash?: unknown;
+    predecessorHash?: unknown;
+    sourceHash?: unknown;
+    title?: unknown;
+  } = {},
 ): DriveFile {
   if (kind !== "edition" && kind !== "resource" && kind !== "progress")
     throw new Error("Type de fichier Drive inconnu.");
@@ -72,9 +80,26 @@ function driveFile(
   };
   if (details.editionHash !== undefined)
     file.editionHash = fileHash(details.editionHash);
+  readEditionLineage(file, details.predecessorHash, details.sourceHash);
   if (kind === "edition" && typeof details.title === "string")
     file.title = details.title.trim().slice(0, 240);
   return file;
+}
+
+function readEditionLineage(
+  file: DriveFile,
+  predecessor: unknown,
+  source: unknown,
+) {
+  if (predecessor === undefined && source === undefined) return;
+  if (file.kind !== "edition" || !file.editionHash)
+    throw new Error("Édition précédente ou source Drive invalide.");
+  if (predecessor !== undefined) {
+    file.predecessorHash = fileHash(predecessor);
+    if (file.predecessorHash === file.editionHash)
+      throw new Error("Édition précédente Drive invalide.");
+  }
+  if (source !== undefined) file.sourceHash = fileHash(source);
 }
 
 function fileHash(value: unknown, message = "Clé d’édition Drive invalide.") {
@@ -104,6 +129,8 @@ function parseFile(value: unknown): DriveFile {
     throw new Error("Métadonnées de fichier Drive invalides.");
   return driveFile(id, properties.kind, properties.digest, Number(size), {
     editionHash: properties.edition,
+    predecessorHash: properties.predecessor,
+    sourceHash: properties.source,
     title: name,
   });
 }
@@ -149,6 +176,19 @@ async function readFileBytes(response: Response, size: number) {
   return bytes;
 }
 
+async function verifyDigest(bytes: Uint8Array<ArrayBuffer>, expected: string) {
+  if ((await sha256(bytes)) !== expected)
+    throw new Error("L’empreinte du fichier Drive ne correspond pas.");
+}
+
+function matchesHeader(response: Response, count: number, size: number) {
+  if (response.status === 200) return count === size;
+  return (
+    response.status === 206 &&
+    response.headers.get("Content-Range") === `bytes 0-${count - 1}/${size}`
+  );
+}
+
 function confirmedOffset(response: Response, minimum: number, maximum: number) {
   const range = response.headers.get("Range");
   const match = range?.match(/^bytes=0-(\d+)$/);
@@ -179,7 +219,9 @@ async function readUploadState(
     completed.digest !== file.digest ||
     completed.kind !== file.kind ||
     completed.size !== file.size ||
-    completed.editionHash !== file.editionHash
+    completed.editionHash !== file.editionHash ||
+    completed.predecessorHash !== file.predecessorHash ||
+    completed.sourceHash !== file.sourceHash
   ) {
     throw new Error("Confirmation de transfert Google Drive incohérente.");
   }
@@ -215,6 +257,7 @@ export function createDriveTransport(http: typeof fetch = globalThis.fetch) {
       q: `trashed = false and 'me' in owners and appProperties has { key='blacture' and value='${marker}' }`,
       spaces: "drive",
       fields: `nextPageToken,incompleteSearch,files(${fileFields})`,
+      orderBy: "modifiedTime desc,name",
       pageSize: "100",
     });
     const files: DriveFile[] = [];
@@ -271,9 +314,35 @@ export function createDriveTransport(http: typeof fetch = globalThis.fetch) {
         `${drive}/files/${file.id}?alt=media`,
       );
       const bytes = await readFileBytes(response, file.size);
-      if ((await sha256(bytes)) !== file.digest)
-        throw new Error("L’empreinte du fichier Drive ne correspond pas.");
+      await verifyDigest(bytes, file.digest);
       return bytes;
+    },
+    async readEditionHeader(auth: DriveAuthorization, descriptor: DriveFile) {
+      if (descriptor.kind !== "edition") return undefined;
+      const { id, size, digest } = driveFile(
+        descriptor.id,
+        descriptor.kind,
+        descriptor.digest,
+        descriptor.size,
+        descriptor,
+      );
+      const count = Math.min(size, editionHeaderBytes);
+      const options =
+        size > count ? { headers: { Range: `bytes=0-${count - 1}` } } : {};
+      const response = await request(
+        auth,
+        `${drive}/files/${id}?alt=media`,
+        options,
+      );
+      if (!matchesHeader(response, count, size)) {
+        await response.body?.cancel();
+        return undefined;
+      }
+      const bytes = await readFileBytes(response, count);
+      if (count === size) await verifyDigest(bytes, digest);
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+        stream: count < size,
+      });
     },
     async startUpload(
       auth: DriveAuthorization,
@@ -307,6 +376,8 @@ export function createDriveTransport(http: typeof fetch = globalThis.fetch) {
             kind: file.kind,
             digest: file.digest,
             edition: file.editionHash,
+            predecessor: file.predecessorHash,
+            source: file.sourceHash,
           },
         }),
       });

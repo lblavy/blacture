@@ -37,12 +37,38 @@ function fixture() {
       .fn()
       .mockResolvedValue({ diagnostics: [] } as unknown as ImportedBook),
     saveEdition: vi.fn().mockResolvedValue(entry),
+    replaceEdition: vi
+      .fn()
+      .mockResolvedValue({ key: "2", omitted: 1, replaced: true }),
     listBooks: vi.fn().mockResolvedValue([entry]),
   };
   const submit = () =>
     controls.form.dispatchEvent(new Event("submit", { cancelable: true }));
   return { controls, services, submit, actions };
 }
+
+it("replaces only the chosen book and reports omitted reading progress", async () => {
+  const { controls, services, submit, actions } = fixture();
+  startImportScreen(controls, actions, services);
+  const replacement = controls.form.querySelector<HTMLSelectElement>(
+    "#import-replacement",
+  )!;
+  await vi.waitFor(() => expect(replacement.options).toHaveLength(2));
+  replacement.value = entry.key;
+  replacement.dispatchEvent(new Event("change"));
+  expect(controls.submit.textContent).toBe("Remplacer l’ouvrage");
+  submit();
+  await vi.waitFor(() =>
+    expect(controls.status.textContent).toContain("1 élément du suivi"),
+  );
+  expect(services.replaceEdition).toHaveBeenCalledWith(
+    entry.key,
+    expect.anything(),
+    expect.any(AbortSignal),
+  );
+  expect(services.saveEdition).not.toHaveBeenCalled();
+  expect(replacement.value).toBe("");
+});
 
 it("renders the catalogue and refreshes it only upon a successful commit", async () => {
   const { controls, services, submit, actions } = fixture();

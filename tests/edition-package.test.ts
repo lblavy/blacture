@@ -29,6 +29,37 @@ const book = await importMarkdown(
 const expectedKey = JSON.stringify([book.workId, book.editionId]);
 const bytes = book.resources[0]!.bytes;
 
+it("versionne le paquet d’une révision pour garder les anciens clients à l’écart", () => {
+  const revision = {
+    ...book,
+    editionId: "a".repeat(64),
+    sourceEditionId: book.editionId,
+    replacesEditionId: book.editionId,
+  };
+  const encoded = encodeEditionPackage(revision);
+  expect(decodeEditionPackage(encoded)).toMatchObject({
+    schemaVersion: 2,
+    manifest: { replacesEditionId: book.editionId },
+  });
+  expect(() =>
+    decodeEditionPackage(
+      encoded.replace('{"schemaVersion":2', '{"schemaVersion":1'),
+    ),
+  ).toThrow();
+  expect(() =>
+    encodeEditionPackage({
+      ...revision,
+      replacesEditionId: revision.editionId,
+    }),
+  ).toThrow();
+  expect(() =>
+    encodeEditionPackage({ ...book, sourceEditionId: book.editionId }),
+  ).toThrow();
+  expect(decodeEditionPackage(encodeEditionPackage(book)).schemaVersion).toBe(
+    1,
+  );
+});
+
 function modifiedHtml(html: (previous: string) => string) {
   const encoded = encodeEditionPackage(book);
   const data = JSON.parse(encoded) as { fragments: { html: string }[] };

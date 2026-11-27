@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   chromium,
   type BrowserContext,
+  type Locator,
   type Page,
   type Route,
 } from "playwright-core";
@@ -177,8 +178,117 @@ async function synchronize(page: Page) {
     .click();
 }
 
+async function respondToReplacement(
+  page: Page,
+  download: Locator,
+  accept: boolean,
+) {
+  await Promise.all([
+    page.waitForEvent("dialog").then(async (dialog) => {
+      assert.equal(dialog.type(), "confirm");
+      assert.match(
+        dialog.message(),
+        new RegExp(`Remplacer « ${bookTitle} »`, "u"),
+      );
+      if (accept) await dialog.accept();
+      else await dialog.dismiss();
+    }),
+    download.click(),
+  ]);
+}
+
+async function adoptRevisedBook(
+  publisher: Page,
+  reader: Page,
+  google: ReturnType<typeof googleFixture>,
+) {
+  await publisher
+    .getByLabel("Remplacer un ouvrage")
+    .selectOption({ label: bookTitle });
+  await publisher.getByLabel("Fichier Markdown").setInputFiles({
+    name: `${bookTitle}.md`,
+    mimeType: "text/markdown",
+    buffer: Buffer.from(
+      `${markdown}\n\n# Troisième passage\n\nUn ajout inédit.`,
+    ),
+  });
+  await publisher
+    .getByRole("button", { name: "Remplacer l’ouvrage", exact: true })
+    .click();
+  await publisher
+    .locator("#import-status")
+    .getByText(/Ouvrage remplacé/u)
+    .waitFor();
+  await synchronize(publisher);
+  await publisher
+    .getByText("Ouvrage et progression synchronisés.", { exact: true })
+    .waitFor();
+  assert.equal(google.editions(), 2);
+
+  await reader.getByRole("button", { name: "Actualiser la liste" }).click();
+  const candidate = reader.getByRole("button", {
+    name: `Télécharger ${bookTitle} · édition mise à jour`,
+    exact: true,
+  });
+  await candidate.waitFor();
+  assert.equal(
+    await reader
+      .getByRole("button", { name: `Télécharger ${bookTitle}`, exact: true })
+      .count(),
+    0,
+  );
+  const localBook = reader
+    .locator("#catalog")
+    .getByRole("button", { name: bookTitle, exact: true });
+  await respondToReplacement(reader, candidate, false);
+  await reader
+    .getByText("Remplacement annulé. L’édition locale est conservée.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await localBook.count(), 1);
+  await reader
+    .locator("#catalog")
+    .getByText("Terminé", { exact: true })
+    .waitFor();
+
+  await respondToReplacement(reader, candidate, true);
+  await reader
+    .getByText("Ouvrage disponible hors ligne. Progression Drive récupérée.", {
+      exact: true,
+    })
+    .waitFor();
+  assert.equal(await localBook.count(), 1);
+  await reader.getByText("Sauvegarde locale", { exact: true }).click();
+  await reader
+    .getByLabel("Ouvrage à sauvegarder")
+    .selectOption({ label: bookTitle });
+  await reader
+    .getByRole("button", { name: "Exporter l’édition précédente" })
+    .waitFor();
+
+  await localBook.click();
+  const progress = reader.getByText("Progression de lecture", { exact: true });
+  if (await progress.evaluate((summary) => !summary.closest("details")?.open))
+    await progress.click();
+  const sectionProgress = reader.locator("#reader-section-progress");
+  await sectionProgress.getByText("Terminé", { exact: true }).waitFor();
+  await reader.getByRole("button", { name: "Fragment suivant" }).click();
+  await reader
+    .locator("#fragment-preview")
+    .getByText("Un deuxième passage de test.")
+    .waitFor();
+  await sectionProgress.getByText("Terminé", { exact: true }).waitFor();
+  await reader.getByRole("button", { name: "Fragment suivant" }).click();
+  await reader
+    .locator("#fragment-preview")
+    .getByText("Un ajout inédit.")
+    .waitFor();
+  await sectionProgress.getByText("Non commencé", { exact: true }).waitFor();
+}
+
 test(
-  "Chrome transfers a book and converges after a synthetic Drive token expires",
+  "Chrome converges after simulated Drive token expiry and adopts a revised book with confirmation",
   { timeout: 60_000 },
   async () => {
     const root = resolve("work/b06-e2e");
@@ -279,6 +389,7 @@ test(
           .getByText("Terminé", { exact: true })
           .waitFor();
         assert.equal(google.editions(), 1);
+        await adoptRevisedBook(a, b, google);
       } finally {
         await browser.close();
         await server.close();

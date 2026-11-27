@@ -31,11 +31,11 @@ function observe(
   unitId: string,
   elapsedMs = READING_TIME_MS,
   coverage = FULL_COVERAGE,
-): ProgressEvent {
+) {
   return {
     deviceId,
     clock,
-    kind: "observe",
+    kind: "observe" as const,
     samples: [{ unitId, elapsedMs, coverage }],
   };
 }
@@ -73,6 +73,93 @@ describe("projection du journal de lecture B06", () => {
     });
   });
 
+  it("fusionne par maximum les lectures reprises, puis cumule les nouvelles observations", () => {
+    const windows = {
+      ...observe("windows", 2, "passage-30", 4_000, 0b0011),
+      kind: "migrate" as const,
+    };
+    const android = {
+      ...observe("android", 5, "passage-30", 5_000, 0b1100),
+      kind: "migrate" as const,
+    };
+    const other = {
+      ...observe("android", 6, "passage-35"),
+      kind: "migrate" as const,
+    };
+    const newReading = observe("windows", 3, "passage-30", 2_000, 0b0100);
+    const events = [newReading, windows, android, other, windows, newReading];
+    expect(mergeProgressEvents(index, [windows, android]).observations).toEqual(
+      {
+        "passage-30": { elapsedMs: 5_000, coverage: FULL_COVERAGE },
+      },
+    );
+    const merged = mergeProgressEvents(index, events);
+    expect(merged).toEqual(mergeProgressEvents(index, [...events].reverse()));
+    expect(merged.observations).toEqual({
+      "passage-30": { elapsedMs: 7_000, coverage: FULL_COVERAGE },
+      "passage-35": { elapsedMs: READING_TIME_MS, coverage: FULL_COVERAGE },
+    });
+    expect(summarizeProgress(index, merged).firstUnread?.blockId).toBe(
+      "passage-30",
+    );
+  });
+
+  it("refuse un rejeu qui change la provenance des observations", () => {
+    const sample = observe("windows", 1, "passage-30");
+    const migrated = { ...sample, kind: "migrate" as const };
+    for (const events of [
+      [migrated, sample],
+      [sample, migrated],
+    ])
+      expect(() => mergeProgressEvents(index, events)).toThrow(/identité/u);
+  });
+
+  it("donne la priorité aux corrections et positions de la nouvelle édition", () => {
+    const correction = {
+      kind: "mode" as const,
+      deviceId: "windows",
+      clock: 2,
+      scopeId: "section-30",
+      mode: "unread" as const,
+    };
+    const position = {
+      kind: "visit" as const,
+      deviceId: "windows",
+      clock: 4,
+      position: { fragmentId: "fragment-35", blockId: "passage-35" },
+    };
+    const inherited = [
+      {
+        ...correction,
+        deviceId: "android",
+        clock: 90,
+        inherited: true as const,
+        mode: "read" as const,
+      },
+      {
+        ...position,
+        deviceId: "android",
+        clock: 91,
+        inherited: true as const,
+        position: { fragmentId: "fragment-30", blockId: "passage-30" },
+      },
+    ];
+    const result = mergeProgressEvents(index, [
+      position,
+      ...inherited,
+      correction,
+    ]);
+    expect(result.modes).toEqual({ "section-30": "unread" });
+    expect(result.last).toEqual(position.position);
+    for (const event of [correction, position])
+      expect(() =>
+        mergeProgressEvents(index, [
+          { ...event, inherited: true as const },
+          event,
+        ]),
+      ).toThrow(/identité/u);
+  });
+
   it("conserve le sens de réinitialisation parent/enfant et retrouve les observations en automatique", () => {
     const book: ProgressEvent = {
       kind: "mode",
@@ -104,6 +191,62 @@ describe("projection du journal de lecture B06", () => {
       fragmentId: "fragment-35",
       blockId: "passage-35",
     });
+  });
+
+  it("fusionne les corrections héritées par niveau sans effacer les chapitres", () => {
+    const parent: ProgressEvent = {
+      kind: "mode",
+      deviceId: "windows",
+      clock: 1,
+      scopeId: "part",
+      mode: "read",
+      inherited: true,
+    };
+    const child: ProgressEvent = {
+      ...parent,
+      clock: 2,
+      scopeId: "section-35",
+      mode: "unread",
+    };
+    const anotherParent = { ...parent, deviceId: "android", clock: 3 };
+    const journal = [child, anotherParent, parent, child];
+    const joined = mergeProgressEvents(index, journal);
+    expect(joined).toEqual(mergeProgressEvents(index, [...journal].reverse()));
+    expect(joined.modes).toEqual({ part: "read", "section-35": "unread" });
+    expect(effectiveMode(index, joined, "section-35")).toBe("unread");
+
+    const reset: ProgressEvent = {
+      kind: "mode",
+      deviceId: parent.deviceId,
+      clock: parent.clock,
+      scopeId: parent.scopeId,
+      mode: "auto",
+    };
+    expect(
+      mergeProgressEvents(index, [reset, child, anotherParent]).modes,
+    ).toEqual({
+      part: "auto",
+    });
+  });
+
+  it("départage les corrections héritées concurrentes sur un même niveau", () => {
+    const book: ProgressEvent = {
+      kind: "mode",
+      deviceId: "android",
+      clock: 1,
+      scopeId: BOOK_SCOPE,
+      mode: "read",
+      inherited: true,
+    };
+    const override = { ...book, deviceId: "windows", mode: "unread" as const };
+    const absent = { ...book, scopeId: "absent", clock: 2 };
+    for (const journal of [
+      [book, override, absent],
+      [override, absent, book],
+    ])
+      expect(mergeProgressEvents(index, journal).modes).toEqual({
+        [BOOK_SCOPE]: "unread",
+      });
   });
 
   it("départage des corrections concurrentes par identifiant ordinal", () => {

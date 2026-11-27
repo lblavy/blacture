@@ -1,4 +1,5 @@
 import "./styles.css";
+import { mountBackupPanel } from "./backup/backup-panel";
 import { startImportScreen } from "./import-screen";
 import { startInstallSupport } from "./install-support";
 import { startReader } from "./reader";
@@ -12,6 +13,10 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 
 let drive: ReturnType<typeof startDriveController> | undefined;
+const backup = mountBackupPanel(
+  element<HTMLDetailsElement>("backup-panel"),
+  () => catalog.refresh(),
+);
 let driveLoading:
   Promise<ReturnType<typeof startDriveController> | undefined> | undefined;
 
@@ -31,6 +36,7 @@ const catalog = startImportScreen(
     resume: (entry, kind) => reader.resume(entry, kind),
     changed: () => {
       void drive?.refreshLocal();
+      void backup.refreshBooks();
     },
   },
 );
@@ -96,16 +102,21 @@ if (import.meta.env.PROD) {
       catalog.prepareUpdate(),
       reader.prepareUpdate(),
       driveLoading?.then((controller) => controller?.settleForUpdate()),
-    ]).then(([catalogResult, readerResult, driveResult]) => {
+      backup.settleForUpdate(),
+    ]).then(([catalogResult, readerResult, driveResult, backupResult]) => {
       function release() {
         preparation = undefined;
         catalog.resumeAfterUpdate();
         if (readerResult.status === "fulfilled") readerResult.value();
         if (driveResult.status === "fulfilled") driveResult.value?.();
+        if (backupResult.status === "fulfilled") backupResult.value();
       }
-      const outcome = [catalogResult, readerResult, driveResult].find(
-        (result) => result.status === "rejected",
-      );
+      const outcome = [
+        catalogResult,
+        readerResult,
+        driveResult,
+        backupResult,
+      ].find((result) => result.status === "rejected");
       if (outcome) {
         release();
         throw outcome.reason;

@@ -3,6 +3,7 @@ import {
   summarizeProgress,
   type ProgressState,
   type ReadingIndex,
+  type ReadingPosition,
   type ReadingStatus,
   type ReadingUnit,
 } from "./domain/progress";
@@ -10,11 +11,13 @@ import {
   mergeProgressEvents,
   type ProgressEvent,
 } from "./domain/progress-sync";
+import { migrateEditionProgress } from "./domain/edition-migration";
 import type {
   ImportedBook,
   ImportedFragment,
   ImportedResource,
 } from "./import";
+import { fingerprint, sha256 } from "./import/identity";
 import { extractReadingUnits } from "./reading-index";
 import type { TransferTicket } from "./sync/drive-upload";
 import {
@@ -36,6 +39,8 @@ export interface CatalogEntry {
   firstFragmentId: string | undefined;
   resourceBytes: number;
   progress?: CatalogProgress;
+  sourceEditionId?: string;
+  hasPreviousEdition?: boolean;
 }
 
 export type Manifest = Omit<ImportedBook, "fragments" | "resources">;
@@ -45,6 +50,8 @@ const stores = ["catalog", "manifests", "fragments", "resources"];
 const journalHeads = "progress-journal-heads";
 const journalEvents = "progress-journal-events";
 const remoteEvents = "progress-remote-events";
+const previousEditions = "previous-editions";
+const restoredDevices = "restored-progress-devices";
 // Leave ample local counter space even when Drive contains an aberrant clock.
 const maxRemoteProgressClock = 2 ** 48;
 const driveTickets = "drive-transfer-tickets";
@@ -52,13 +59,18 @@ const driveProgress = "drive-progress-cursors";
 const driveSelections = "drive-edition-selections";
 const selectedEditions = "selected-editions";
 const driveBindingPreference = "drive-account-binding";
-const journalWriteStores = [
+const editionLocalStores = [
+  ...stores,
+  "progress",
+  "reading-indexes",
   journalHeads,
   journalEvents,
-  "preferences",
-  "manifests",
+  remoteEvents,
+  previousEditions,
+  restoredDevices,
 ];
-const devicePreference = "progress-device-id";
+const editionDriveStores = ["preferences", driveSelections, driveProgress];
+const journalWriteStores = [journalHeads, journalEvents, "manifests"];
 
 interface JournalHead {
   deviceId: string;
@@ -67,7 +79,7 @@ interface JournalHead {
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("blacture-library", 4);
+    const request = indexedDB.open("blacture-library", 5);
     request.onupgradeneeded = ({ oldVersion }) => {
       if (oldVersion === 0) {
         for (const store of stores) request.result.createObjectStore(store);
@@ -77,12 +89,19 @@ function openDatabase(): Promise<IDBDatabase> {
         request.result.createObjectStore("progress");
         request.result.createObjectStore("reading-indexes");
       }
-      request.result.createObjectStore(journalHeads);
-      request.result.createObjectStore(journalEvents);
-      request.result.createObjectStore(remoteEvents);
-      request.result.createObjectStore(driveTickets);
-      request.result.createObjectStore(driveProgress);
-      request.result.createObjectStore(driveSelections);
+      if (oldVersion < 4) {
+        for (const store of [
+          journalHeads,
+          journalEvents,
+          remoteEvents,
+          driveTickets,
+          driveProgress,
+          driveSelections,
+        ])
+          request.result.createObjectStore(store);
+      }
+      request.result.createObjectStore(previousEditions);
+      request.result.createObjectStore(restoredDevices);
     };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -162,32 +181,39 @@ export async function saveEdition(
   if (book.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     throw new Error("L’édition présente une perte de contenu.");
   }
-  const key = JSON.stringify([book.workId, book.editionId]);
-  const entry: CatalogEntry = {
-    key,
-    title: book.title,
-    firstFragmentId: book.fragments[0]?.id,
-    resourceBytes: book.resources.reduce(
-      (total, resource) => total + resource.bytes.byteLength,
-      0,
-    ),
-  };
+  const entry = catalogEntry(book);
+  const { key } = entry;
 
   return transact(
     stores,
     "readwrite",
     (tx, capture) => {
       const catalog = tx.objectStore("catalog");
-      const existing = catalog.get(key);
+      const existing = catalog.getAll();
       existing.onsuccess = () => {
-        capture((existing.result as CatalogEntry | undefined) ?? entry);
-        if (existing.result) return;
+        const entries: CatalogEntry[] = existing.result;
+        const saved = entries.find((candidate) => matchesBook(candidate, book));
+        capture(saved ?? entry);
+        if (saved) return;
         writeEdition(tx, key, book);
         catalog.add(entry, key);
       };
     },
     signal,
   );
+}
+
+function catalogEntry(book: ImportedBook): CatalogEntry {
+  return {
+    key: JSON.stringify([book.workId, book.editionId]),
+    title: book.title,
+    ...(book.sourceEditionId ? { sourceEditionId: book.sourceEditionId } : {}),
+    firstFragmentId: book.fragments[0]?.id,
+    resourceBytes: book.resources.reduce(
+      (total, resource) => total + resource.bytes.byteLength,
+      0,
+    ),
+  };
 }
 
 function read<T>(
@@ -215,6 +241,22 @@ function editionRange(key: string) {
   return IDBKeyRange.bound([key], [key, []], false, true);
 }
 
+function matchesBook(
+  entry: CatalogEntry,
+  book: ImportedBook,
+  matchWork = false,
+) {
+  const [workId, editionId] = JSON.parse(entry.key) as [string, string];
+  const sameWork = workId === book.workId;
+  if (!entry.sourceEditionId && !book.sourceEditionId)
+    return sameWork && (matchWork || editionId === book.editionId);
+  return (
+    sameWork ||
+    (entry.sourceEditionId ?? editionId) ===
+      (book.sourceEditionId ?? book.editionId)
+  );
+}
+
 function orderEditionFragments(
   manifest: Manifest,
   stored: readonly ImportedFragment[],
@@ -238,8 +280,9 @@ function readEditionResources(
   tx: IDBTransaction,
   key: string,
   fragments: readonly ImportedFragment[],
+  capture: (resources: ImportedResource[]) => void,
   fail: (error: unknown) => void,
-): ImportedResource[] {
+) {
   const ids = new Set(fragments.flatMap((fragment) => fragment.resourceIds));
   const resources: ImportedResource[] = [];
   const store = tx.objectStore("resources");
@@ -247,11 +290,52 @@ function readEditionResources(
     const request = store.get([key, id]);
     request.onsuccess = () => {
       const resource: ImportedResource | undefined = request.result;
-      if (resource?.id === id) resources.push(resource);
-      else fail(new Error("Ressource de l’édition introuvable."));
+      if (resource?.id !== id) {
+        fail(new Error("Ressource de l’édition introuvable."));
+        return;
+      }
+      resources.push(resource);
+      if (resources.length === ids.size) capture(resources);
     };
   }
-  return resources;
+  if (ids.size === 0) capture(resources);
+}
+
+function readEditionSnapshot(
+  tx: IDBTransaction,
+  key: string,
+  capture: (value: ImportedBook) => void,
+  fail: (error: unknown) => void,
+) {
+  const catalog = tx.objectStore("catalog").getKey(key);
+  const manifestRequest = tx.objectStore("manifests").get(key);
+  const fragmentsRequest = tx
+    .objectStore("fragments")
+    .getAll(editionRange(key));
+  fragmentsRequest.onsuccess = () => {
+    const manifest: Manifest | undefined = manifestRequest.result;
+    if (catalog.result === undefined || !manifest) {
+      fail(new Error("Ouvrage introuvable."));
+      return;
+    }
+    try {
+      if (JSON.stringify([manifest.workId, manifest.editionId]) !== key)
+        throw new Error("Édition incohérente.");
+      const fragments = orderEditionFragments(
+        manifest,
+        fragmentsRequest.result,
+      );
+      readEditionResources(
+        tx,
+        key,
+        fragments,
+        (resources) => capture({ ...manifest, fragments, resources }),
+        fail,
+      );
+    } catch (error) {
+      fail(error);
+    }
+  };
 }
 
 export function exportEdition(
@@ -261,29 +345,410 @@ export function exportEdition(
   return transact(
     stores,
     "readonly",
+    (tx, capture, fail) => readEditionSnapshot(tx, key, capture, fail),
+    signal,
+  );
+}
+
+export interface BookBackupSnapshot {
+  book: ImportedBook;
+  progress: ProgressState;
+  events: ProgressEvent[];
+}
+
+export class BackupAlreadyPresentError extends Error {
+  override name = "BackupAlreadyPresentError";
+
+  constructor() {
+    super("Cet ouvrage figure déjà dans la bibliothèque.");
+  }
+}
+
+export function exportBookBackup(
+  key: string,
+  signal?: AbortSignal,
+): Promise<BookBackupSnapshot> {
+  return transact(
+    [...stores, "progress", journalEvents, remoteEvents],
+    "readonly",
+    (tx, capture, fail) => readBackupSnapshot(tx, key, capture, fail),
+    signal,
+  );
+}
+
+function readBackupSnapshot(
+  tx: IDBTransaction,
+  key: string,
+  capture: (snapshot: BookBackupSnapshot) => void,
+  fail: (error: unknown) => void,
+) {
+  const progress = tx.objectStore("progress").get(key);
+  const local = readLocalEvents(tx, key);
+  const remote = readRemoteEvents(tx, key);
+  readEditionSnapshot(
+    tx,
+    key,
+    (book) => {
+      capture({
+        book,
+        progress: progress.result ?? initialProgress(),
+        events: [...local.result, ...remote.result],
+      });
+    },
+    fail,
+  );
+}
+
+export function exportPreviousEdition(
+  key: string,
+  signal?: AbortSignal,
+): Promise<BookBackupSnapshot | undefined> {
+  return read(previousEditions, (store) => store.get(key), signal);
+}
+
+function removeEdition(transaction: IDBTransaction, key: string) {
+  clearEditionDriveState(transaction, key);
+  for (const store of [
+    "catalog",
+    "manifests",
+    "progress",
+    "reading-indexes",
+    journalHeads,
+    previousEditions,
+    restoredDevices,
+  ])
+    transaction.objectStore(store).delete(key);
+  for (const store of ["fragments", "resources", journalEvents, remoteEvents])
+    transaction.objectStore(store).delete(editionRange(key));
+}
+
+function restoredCursorKey(key: string, deviceId: string) {
+  return JSON.stringify(["restored", key, deviceId]);
+}
+
+function clearEditionDriveState(tx: IDBTransaction, key: string) {
+  const account = tx.objectStore("preferences").get(driveBindingPreference);
+  const devices = tx.objectStore(restoredDevices).get(key);
+  devices.onsuccess = () => {
+    if (!account.result) return;
+    const cursors = tx.objectStore(driveProgress);
+    cursors.delete([account.result, key]);
+    const restored: Map<string, number[]> | undefined = devices.result;
+    for (const deviceId of restored?.keys() ?? [])
+      cursors.delete([account.result, restoredCursorKey(key, deviceId)]);
+    const store = tx.objectStore(driveSelections);
+    const selectionKey = [account.result, selectedEditions];
+    const selection = store.get(selectionKey);
+    selection.onsuccess = () => {
+      const selected: string[] | undefined = selection.result;
+      if (selected?.includes(key))
+        store.put(
+          selected.filter((value) => value !== key),
+          selectionKey,
+        );
+    };
+  };
+}
+
+export function removeLocalEdition(
+  key: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return transact(
+    [...editionLocalStores, ...editionDriveStores],
+    "readwrite",
+    (tx) => removeEdition(tx, key),
+    signal,
+  );
+}
+
+function editionRender(book: ImportedBook) {
+  const fragments = book.fragments.map(
+    ({ id, html, blockIds, resourceIds }) => [
+      id,
+      fingerprint(html),
+      blockIds,
+      resourceIds,
+    ],
+  );
+  const compare = (left: string, right: string) =>
+    left === right ? 0 : left < right ? -1 : 1;
+  const destinations = Object.entries(book.destinations).sort(
+    ([left], [right]) => compare(left, right),
+  );
+  const diagnostics = [...book.diagnostics].sort((left, right) =>
+    compare(left.code, right.code),
+  );
+  return JSON.stringify([
+    book.sourceEditionId ?? book.editionId,
+    book.sections,
+    Object.fromEntries(destinations),
+    diagnostics,
+    fragments,
+  ]);
+}
+
+export async function replaceEdition(
+  key: string,
+  incoming: ImportedBook,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  if (incoming.diagnostics.some(({ severity }) => severity === "error"))
+    throw new Error("L’édition présente une perte de contenu.");
+  const previous = await readManifest(key, signal);
+  if (!previous) throw new Error("Ouvrage introuvable.");
+  const { workId, editionId: replacedId, title } = previous;
+  const render = editionRender(incoming);
+  const editionId = await sha256(
+    new TextEncoder().encode(JSON.stringify([replacedId, render])),
+  );
+  const book: ImportedBook = {
+    ...incoming,
+    workId,
+    title,
+    editionId,
+    sourceEditionId: incoming.editionId,
+    replacesEditionId: replacedId,
+  };
+  return publishReplacement(key, book, indexFromBook(book), [], signal, render);
+}
+
+export function adoptDriveEdition(
+  previousKey: string,
+  book: ImportedBook,
+  index: ReadingIndex,
+  received: readonly ProgressEvent[],
+  signal?: AbortSignal,
+) {
+  const [workId, editionId] = JSON.parse(previousKey) as [string, string];
+  if (
+    workId !== book.workId ||
+    editionId !== book.replacesEditionId ||
+    editionId === book.editionId
+  )
+    throw new Error("Cette édition ne remplace pas la copie locale.");
+  return publishReplacement(previousKey, book, index, received, signal);
+}
+
+function publishReplacement(
+  key: string,
+  book: ImportedBook,
+  nextIndex: ReadingIndex,
+  received: readonly ProgressEvent[],
+  signal?: AbortSignal,
+  render?: string,
+) {
+  return transact<{ key: string; omitted: number; replaced: boolean }>(
+    [...editionLocalStores, ...editionDriveStores],
+    "readwrite",
     (tx, capture, fail) => {
-      const catalog = tx.objectStore("catalog").getKey(key);
-      const manifestRequest = tx.objectStore("manifests").get(key);
-      const fragmentsRequest = tx
-        .objectStore("fragments")
-        .getAll(editionRange(key));
-      fragmentsRequest.onsuccess = () => {
-        const manifest: Manifest | undefined = manifestRequest.result;
-        if (catalog.result === undefined || !manifest) {
-          fail(new Error("Ouvrage introuvable."));
-          return;
-        }
+      const indexes = tx.objectStore("reading-indexes");
+      const archivedIndex = indexes.get(key);
+      const catalog = tx.objectStore("catalog");
+      const otherBooks = catalog.getAll();
+      readBackupSnapshot(
+        tx,
+        key,
+        (previous) => {
+          try {
+            const entry = catalogEntry(book);
+            if (
+              render !== undefined &&
+              editionRender(previous.book) === render
+            ) {
+              capture({ key, omitted: 0, replaced: false });
+              return;
+            }
+            if (
+              (otherBooks.result as CatalogEntry[]).some(
+                (other) => other.key !== key && matchesBook(other, book),
+              )
+            )
+              throw new Error(
+                "Ce Markdown correspond déjà à un autre ouvrage de la bibliothèque.",
+              );
+            const previousIndex: ReadingIndex =
+              archivedIndex.result ?? indexFromBook(previous.book);
+            const { progress, omitted } = migrateEditionProgress(
+              previousIndex,
+              nextIndex,
+              previous.progress,
+            );
+            tx.objectStore(previousEditions).add(previous, entry.key);
+            removeEdition(tx, key);
+            writeEdition(tx, entry.key, book);
+            indexes.add(nextIndex, entry.key);
+            const merged = importReplacementProgress(
+              tx,
+              entry.key,
+              book,
+              nextIndex,
+              progress,
+              received,
+            );
+            tx.objectStore("progress").add(merged, entry.key);
+            catalog.add(
+              {
+                ...entry,
+                hasPreviousEdition: true,
+                progress: readingCatalogProgress(nextIndex, merged),
+              },
+              entry.key,
+            );
+            capture({ key: entry.key, omitted, replaced: true });
+          } catch (error) {
+            fail(signal?.aborted ? signal.reason : error);
+          }
+        },
+        fail,
+      );
+    },
+    signal,
+  );
+}
+
+function importReplacementProgress(
+  tx: IDBTransaction,
+  key: string,
+  book: ImportedBook,
+  index: ReadingIndex,
+  migrated: ProgressState,
+  received: readonly ProgressEvent[],
+) {
+  const changes = initialProgressChanges(migrated, book.sections, true);
+  const head = { deviceId: crypto.randomUUID(), clock: 0 };
+  const written = writeProgressEvents(tx, key, head, changes);
+  if (received.length === 0) return migrated;
+  const progress = mergeProgressEvents(index, [...written, ...received]);
+  appendRemoteEvents(
+    tx,
+    key,
+    { ...head, clock: written.length },
+    received,
+    written,
+    [],
+  );
+  return progress;
+}
+
+function readingCatalogProgress(index: ReadingIndex, state: ProgressState) {
+  const { status, percent } = summarizeProgress(index, state).book;
+  return { status, percent, hasLast: Boolean(state.last) };
+}
+
+function matchingRecords<T>(
+  left: Record<string, T>,
+  right: Record<string, T>,
+  matches: (sample: T, other: T) => boolean,
+) {
+  const entries = Object.entries(left);
+  return (
+    entries.length === Object.keys(right).length &&
+    entries.every(
+      ([key, value]) =>
+        Object.hasOwn(right, key) && matches(value, right[key]!),
+    )
+  );
+}
+
+function positionFields(position?: ReadingPosition) {
+  return JSON.stringify([
+    position?.fragmentId,
+    position?.blockId,
+    position?.anchor,
+  ]);
+}
+
+function verifyReadingProjection(
+  index: ReadingIndex,
+  { events, progress }: BookBackupSnapshot,
+) {
+  if (events.length === 0) return;
+  const projected = mergeProgressEvents(index, events);
+  if (
+    positionFields(projected.last) !== positionFields(progress.last) ||
+    !matchingRecords(
+      projected.modes,
+      progress.modes,
+      (left, right) => left === right,
+    ) ||
+    !matchingRecords(
+      projected.observations,
+      progress.observations,
+      (left, right) =>
+        left.coverage === right.coverage &&
+        Math.abs(left.elapsedMs - right.elapsedMs) < 1e-7,
+    )
+  )
+    throw new Error(
+      "Le journal de la sauvegarde ne correspond pas à sa progression.",
+    );
+}
+
+export async function restoreBookBackup(
+  snapshot: BookBackupSnapshot,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const { book, events, progress } = snapshot;
+  const entry = catalogEntry(book);
+  const { key } = entry;
+  const index = indexFromBook(book);
+  verifyReadingProjection(index, snapshot);
+  return transact(
+    [
+      ...stores,
+      "progress",
+      "reading-indexes",
+      journalHeads,
+      remoteEvents,
+      restoredDevices,
+      ...editionDriveStores,
+    ],
+    "readwrite",
+    (tx, _capture, fail) => {
+      const catalog = tx.objectStore("catalog");
+      const existing = catalog.getAll();
+      existing.onsuccess = () => {
         try {
-          if (JSON.stringify([manifest.workId, manifest.editionId]) !== key)
-            throw new Error("Édition incohérente.");
-          const fragments = orderEditionFragments(
-            manifest,
-            fragmentsRequest.result,
+          if (
+            (existing.result as CatalogEntry[]).some((candidate) =>
+              matchesBook(candidate, book, true),
+            )
+          )
+            throw new BackupAlreadyPresentError();
+          clearEditionDriveState(tx, key);
+          writeEdition(tx, key, book);
+          tx.objectStore("reading-indexes").put(index, key);
+          tx.objectStore("progress").add(progress, key);
+          if (events.length) {
+            const store = tx.objectStore(remoteEvents);
+            const devices = new Map<string, number[]>();
+            let clock = 0;
+            for (const event of events) {
+              if (event.clock > maxRemoteProgressClock)
+                throw new Error(
+                  "Horloge de progression sauvegardée hors limites.",
+                );
+              store.add(event, [key, event.deviceId, event.clock]);
+              const clocks = devices.get(event.deviceId) ?? [];
+              clocks.push(event.clock);
+              devices.set(event.deviceId, clocks);
+              clock = Math.max(clock, event.clock);
+            }
+            tx.objectStore(restoredDevices).add(devices, key);
+            tx.objectStore(journalHeads).add(
+              { deviceId: crypto.randomUUID(), clock },
+              key,
+            );
+          }
+          catalog.add(
+            { ...entry, progress: readingCatalogProgress(index, progress) },
+            key,
           );
-          const resources = readEditionResources(tx, key, fragments, fail);
-          capture({ ...manifest, fragments, resources });
         } catch (error) {
-          fail(error);
+          fail(signal?.aborted ? signal.reason : error);
         }
       };
     },
@@ -374,20 +839,41 @@ export async function bindDriveAccount(accountId: string): Promise<void> {
   });
 }
 
+interface JournalOwner {
+  key: string;
+  deviceId: string;
+}
+
 function driveValue<T>(
   accountId: string,
   storeName: string,
   key: string,
   update?: (previous: T | undefined) => T,
+  owner?: JournalOwner,
 ): Promise<T | undefined> {
+  const stores = ["preferences", storeName];
+  if (owner) stores.push(journalHeads);
   return transact(
-    ["preferences", storeName],
+    stores,
     update ? "readwrite" : "readonly",
     (tx, capture, fail) => {
+      const journal = owner && tx.objectStore(journalHeads).get(owner.key);
       const binding = tx.objectStore("preferences").get(driveBindingPreference);
       binding.onsuccess = () => {
         if (binding.result !== accountId) {
           fail(differentDriveAccount());
+          return;
+        }
+        if (
+          owner &&
+          (journal?.result as JournalHead | undefined)?.deviceId !==
+            owner.deviceId
+        ) {
+          fail(
+            new Error(
+              "Le journal de lecture a été remplacé depuis le début de l’envoi.",
+            ),
+          );
           return;
         }
         const store = tx.objectStore(storeName);
@@ -466,6 +952,7 @@ export async function writeDriveProgressCursor(
   accountId: string,
   key: string,
   cursor: DriveProgressCursor,
+  owner?: JournalOwner,
 ): Promise<void> {
   const { sentThrough, pendingThrough } = cursor;
   if (
@@ -486,19 +973,19 @@ export async function writeDriveProgressCursor(
         ...(pendingThrough !== undefined ? { pendingThrough } : {}),
       };
     },
+    owner,
   );
 }
 
 export async function readDriveSelections(
   accountId: string,
 ): Promise<string[]> {
-  return (
-    (await driveValue<string[]>(
-      accountId,
-      driveSelections,
-      selectedEditions,
-    )) ?? []
-  );
+  const [selected, local] = await Promise.all([
+    driveValue<string[]>(accountId, driveSelections, selectedEditions),
+    listBooks(),
+  ]);
+  const available = new Set(local.map(({ key }) => key));
+  return (selected ?? []).filter((key) => available.has(key));
 }
 
 export async function trackDriveEdition(
@@ -539,6 +1026,7 @@ function writeProgressEvents(
   if (head.clock + changes.length > maxProgressClock)
     throw new Error("Horloge de progression épuisée.");
   const events = tx.objectStore(journalEvents);
+  const written: ProgressEvent[] = [];
   let { clock } = head;
   for (const change of changes) {
     const event: ProgressEvent = {
@@ -547,8 +1035,10 @@ function writeProgressEvents(
       clock: ++clock,
     };
     events.add(event, [key, clock]);
+    written.push(event);
   }
   tx.objectStore(journalHeads).put({ deviceId: head.deviceId, clock }, key);
+  return written;
 }
 
 function initializeJournal(
@@ -565,21 +1055,23 @@ function initializeJournal(
       fail(new Error("Ouvrage introuvable."));
       return;
     }
-    const preferences = tx.objectStore("preferences");
-    const preference = preferences.get(devicePreference);
-    preference.onsuccess = () => {
-      try {
-        const existing: string | undefined = preference.result;
-        const deviceId = existing ?? crypto.randomUUID();
-        if (!existing) preferences.add(deviceId, devicePreference);
-        writeProgressEvents(tx, key, { deviceId, clock: 0 }, [
-          ...initialProgressChanges(state, manifest.sections),
+    try {
+      writeProgressEvents(
+        tx,
+        key,
+        { deviceId: crypto.randomUUID(), clock: 0 },
+        [
+          ...initialProgressChanges(
+            state,
+            manifest.sections,
+            Boolean(manifest.sourceEditionId),
+          ),
           ...changes,
-        ]);
-      } catch (error) {
-        fail(error);
-      }
-    };
+        ],
+      );
+    } catch (error) {
+      fail(error);
+    }
   };
 }
 
@@ -648,12 +1140,60 @@ export function readProgressJournal(
   );
 }
 
+export function readRestoredProgressJournals(
+  key: string,
+  signal?: AbortSignal,
+): Promise<{ journal: ProgressJournal; cursorKey: string }[]> {
+  return transact(
+    [restoredDevices, remoteEvents],
+    "readonly",
+    (tx, capture) => {
+      const devices = tx.objectStore(restoredDevices).get(key);
+      const journals: { journal: ProgressJournal; cursorKey: string }[] = [];
+      capture(journals);
+      devices.onsuccess = () => {
+        const store = tx.objectStore(remoteEvents);
+        const restored: Map<string, number[]> | undefined = devices.result;
+        for (const [deviceId, clocks] of restored ?? []) {
+          const pending = new Set(clocks);
+          const entries = store.getAll(
+            IDBKeyRange.bound(
+              [key, deviceId, 1],
+              [key, deviceId + "\u0000"],
+              false,
+              true,
+            ),
+          );
+          entries.onsuccess = () =>
+            journals.push({
+              journal: {
+                deviceId,
+                events: (entries.result as ProgressEvent[]).filter(
+                  ({ clock }) => pending.has(clock),
+                ),
+              },
+              cursorKey: restoredCursorKey(key, deviceId),
+            });
+        }
+      };
+    },
+    signal,
+  );
+}
+
 function readLocalEvents(
   tx: IDBTransaction,
   key: string,
 ): IDBRequest<ProgressEvent[]> {
   const range = IDBKeyRange.bound([key, 1], [key, maxProgressClock]);
   return tx.objectStore(journalEvents).getAll(range);
+}
+
+function readRemoteEvents(
+  tx: IDBTransaction,
+  key: string,
+): IDBRequest<ProgressEvent[]> {
+  return tx.objectStore(remoteEvents).getAll(editionRange(key));
 }
 
 function appendRemoteEvents(
@@ -700,9 +1240,7 @@ export function applyRemoteProgress(
     (tx, capture, fail) => {
       const headRequest = tx.objectStore(journalHeads).get(key);
       const localRequest = readLocalEvents(tx, key);
-      const remoteRequest = tx
-        .objectStore(remoteEvents)
-        .getAll(editionRange(key));
+      const remoteRequest = readRemoteEvents(tx, key);
       const catalog = tx.objectStore("catalog");
       const entry = catalog.get(key);
       entry.onsuccess = () => {
@@ -805,6 +1343,27 @@ function unitsForFragment(
   return extractReadingUnits(fragment.html, fragment.blockIds);
 }
 
+function editionSections(manifest: Manifest): ReadingIndex["sections"] {
+  return manifest.sections.map(({ id, parentId, fragmentIds }) => ({
+    id,
+    parentId,
+    fragmentIds: [...fragmentIds],
+  }));
+}
+
+export function indexFromBook(book: ImportedBook): ReadingIndex {
+  const fragments = new Map<string, ReadingUnit[]>();
+  for (const fragment of book.fragments)
+    fragments.set(
+      fragment.id,
+      unitsForFragment(fragment, fragment.id, fragment.sectionId),
+    );
+  return {
+    sections: editionSections(book),
+    fragments: Object.fromEntries(fragments),
+  };
+}
+
 function scanReadingUnits(
   key: string,
   expected: ReadonlyMap<string, string>,
@@ -857,12 +1416,17 @@ function cacheReadingIndex(
   signal: AbortSignal,
 ) {
   return transact<ReadingIndex>(
-    ["reading-indexes"],
+    ["reading-indexes", "manifests"],
     "readwrite",
-    (tx, capture) => {
+    (tx, capture, fail) => {
       const store = tx.objectStore("reading-indexes");
+      const manifest = tx.objectStore("manifests").getKey(key);
       const existing = store.get(key);
       existing.onsuccess = () => {
+        if (manifest.result === undefined) {
+          fail(new Error("Ouvrage introuvable."));
+          return;
+        }
         capture(existing.result ?? index);
         if (!existing.result) store.add(index, key);
       };
@@ -883,11 +1447,7 @@ async function buildReadingIndex(
   );
   if (cached) return cached;
 
-  const sections = manifest.sections.map(({ id, parentId, fragmentIds }) => ({
-    id,
-    parentId,
-    fragmentIds: [...fragmentIds],
-  }));
+  const sections = editionSections(manifest);
   const expected = new Map<string, string>();
   for (const section of sections) {
     for (const fragment of section.fragmentIds) {

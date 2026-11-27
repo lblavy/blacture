@@ -15,7 +15,9 @@ import {
   applyRemoteProgress,
   bindDriveAccount,
   ensureProgressJournal,
+  exportBookBackup,
   exportEdition,
+  exportPreviousEdition,
   listBooks,
   readDriveBinding,
   readDriveProgressCursor,
@@ -28,6 +30,9 @@ import {
   readProgressJournal,
   readReadingIndex,
   readResources,
+  removeLocalEdition,
+  replaceEdition,
+  restoreBookBackup,
   saveEdition,
   saveFontSize,
   trackDriveEdition,
@@ -86,7 +91,35 @@ async function resetDatabase() {
   });
 }
 
-async function seedLegacyEdition(source: ImportedBook, version: 1 | 2 | 3) {
+function seedDriveStores(tx: IDBTransaction, key: string) {
+  const db = tx.db;
+  tx.objectStore("preferences").add("compte-v4", "drive-account-binding");
+  db.createObjectStore("progress-journal-heads").add(
+    { deviceId: "appareil-v4", clock: 7 },
+    key,
+  );
+  db.createObjectStore("progress-journal-events").add(
+    {
+      deviceId: "appareil-v4",
+      clock: 7,
+      kind: "visit",
+      position: { fragmentId: "first", blockId: "p" },
+    },
+    [key, 7],
+  );
+  db.createObjectStore("progress-remote-events");
+  db.createObjectStore("drive-transfer-tickets");
+  db.createObjectStore("drive-progress-cursors").add({ sentThrough: 7 }, [
+    "compte-v4",
+    key,
+  ]);
+  db.createObjectStore("drive-edition-selections").add(
+    [key],
+    ["compte-v4", "selected-editions"],
+  );
+}
+
+async function seedLegacyEdition(source: ImportedBook, version: 1 | 2 | 3 | 4) {
   const key = JSON.stringify([source.workId, source.editionId]);
   const { fragments, resources, ...manifest } = source;
   await new Promise<void>((resolve, reject) => {
@@ -124,6 +157,7 @@ async function seedLegacyEdition(source: ImportedBook, version: 1 | 2 | 3) {
           key,
         );
       }
+      if (version === 4) seedDriveStores(request.transaction!, key);
     };
     request.onsuccess = () => {
       request.result.close();
@@ -136,6 +170,22 @@ async function seedLegacyEdition(source: ImportedBook, version: 1 | 2 | 3) {
 
 describe("publication atomique d’une édition", () => {
   beforeEach(resetDatabase);
+
+  it("ouvre une base B06 sans perdre le contenu, la sélection Drive ni son curseur", async () => {
+    const { key } = await seedLegacyEdition(book(), 4);
+    expect(await readDriveBinding()).toBe("compte-v4");
+    expect(await readDriveSelections("compte-v4")).toEqual([key]);
+    expect(await readDriveProgressCursor("compte-v4", key)).toEqual({
+      sentThrough: 7,
+    });
+    expect(await readProgressJournal(key)).toMatchObject({
+      deviceId: "appareil-v4",
+      events: [{ clock: 7, kind: "visit" }],
+    });
+    expect(await readFragment(key, "first")).toBeDefined();
+    expect(await readProgress(key)).toMatchObject({ last: { blockId: "p" } });
+    expect(await exportPreviousEdition(key)).toBeUndefined();
+  });
 
   it("migre une base B03 et conserve préférences, catalogue et ressources", async () => {
     const source = book();
@@ -442,6 +492,300 @@ describe("publication atomique d’une édition", () => {
   });
 });
 
+describe("restauration de sauvegarde", () => {
+  beforeEach(resetDatabase);
+
+  const source = {
+    ...book(),
+    fragments: [
+      { ...book().fragments[0]!, html: '<p data-block-id="p">Texte.</p>' },
+    ],
+  };
+  const key = JSON.stringify([source.workId, source.editionId]);
+  const event: ProgressEvent = {
+    kind: "observe",
+    deviceId: "ancien-appareil",
+    clock: 4,
+    samples: [{ unitId: "p", elapsedMs: 4000, coverage: 15 }],
+  };
+  const snapshot = {
+    book: source,
+    progress: {
+      observations: { p: { elapsedMs: 4000, coverage: 15 } },
+      modes: {},
+    },
+    events: [event],
+  };
+
+  it("restaure ouvrage, suivi et événements avec leurs identités", async () => {
+    await saveFontSize("small");
+    await restoreBookBackup(snapshot);
+    const restored = await exportBookBackup(key);
+    expect({ ...restored, book: plainEdition(restored.book) }).toEqual({
+      ...snapshot,
+      book: plainEdition(source),
+    });
+    expect(await readFontSize()).toBe("small");
+    const index = await readReadingIndex(key, (await readManifest(key))!);
+    expect(await applyRemoteProgress(key, index, [event])).toEqual(
+      snapshot.progress,
+    );
+    const position = { fragmentId: "first", blockId: "p" };
+    await updateProgress(key, (state) => ({
+      state: { ...state, last: position },
+      events: [{ kind: "visit", position }],
+    }));
+    expect((await readProgressJournal(key))?.events).toMatchObject([
+      { clock: 5, position },
+    ]);
+  });
+
+  it("refuse un ouvrage présent, même dans une autre édition", async () => {
+    const existing = await saveEdition(book("autre-édition"));
+    await expect(restoreBookBackup(snapshot)).rejects.toMatchObject({
+      name: "BackupAlreadyPresentError",
+    });
+    expect(await listBooks()).toEqual([existing]);
+  });
+
+  it("refuse une projection incompatible et annule une écriture interrompue", async () => {
+    await expect(
+      restoreBookBackup({
+        ...snapshot,
+        progress: { observations: {}, modes: {} },
+      }),
+    ).rejects.toThrow();
+    const abort = new AbortController();
+    const add = IDBObjectStore.prototype.add;
+    const probe = vi
+      .spyOn(IDBObjectStore.prototype, "add")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        value: unknown,
+        storageKey?: IDBValidKey,
+      ) {
+        if (this.name === "catalog") abort.abort();
+        return add.call(this, value, storageKey);
+      });
+    try {
+      await expect(
+        restoreBookBackup(snapshot, abort.signal),
+      ).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      probe.mockRestore();
+    }
+    expect(await listBooks()).toEqual([]);
+    expect(await readManifest(key)).toBeUndefined();
+    expect(await readFragment(key, "first")).toBeUndefined();
+    expect(await readProgressJournal(key)).toBeUndefined();
+  });
+});
+
+describe("remplacement d’édition", () => {
+  beforeEach(resetDatabase);
+
+  const previousBook = {
+    ...book(),
+    fragments: [
+      { ...book().fragments[0]!, html: '<p data-block-id="p">Texte.</p>' },
+    ],
+  };
+  const replacement = {
+    ...previousBook,
+    title: "Nouvelle édition",
+    fragments: [
+      {
+        ...previousBook.fragments[0]!,
+        html: '<div><p data-block-id="p">Texte.</p></div>',
+      },
+    ],
+  };
+
+  async function prepare() {
+    const entry = await saveEdition(previousBook);
+    const index = await readReadingIndex(
+      entry.key,
+      (await readManifest(entry.key))!,
+    );
+    await updateProgress(entry.key, (state) => ({
+      state: changeMode(index, state, "section", "read"),
+      events: [{ kind: "mode", scopeId: "section", mode: "read" }],
+    }));
+    return entry;
+  }
+
+  it("ne crée aucune révision quand la source et son rendu sont déjà installés", async () => {
+    const { key } = await prepare();
+    expect(
+      await replaceEdition(key, { ...previousBook, title: "Fichier renommé" }),
+    ).toEqual({ key, omitted: 0, replaced: false });
+    expect(await exportPreviousEdition(key)).toBeUndefined();
+    expect(await readProgress(key)).toMatchObject({
+      modes: { section: "read" },
+    });
+  });
+
+  it("reconnaît la même source après le tri des métadonnées dans une sauvegarde", async () => {
+    const z = { fragmentId: "first", elementId: "blacture-anchor-z" };
+    const a = { fragmentId: "first", elementId: "blacture-anchor-a" };
+    const diagnostics = [
+      { code: "z", count: 1, severity: "warning" as const },
+      { code: "a", count: 1, severity: "warning" as const },
+    ];
+    const { key } = await saveEdition({
+      ...previousBook,
+      destinations: { a, z },
+      diagnostics: [...diagnostics].reverse(),
+    });
+    expect(
+      await replaceEdition(key, {
+        ...previousBook,
+        destinations: { z, a },
+        diagnostics,
+      }),
+    ).toEqual({ key, omitted: 0, replaced: false });
+  });
+
+  it("publie une seule édition et sauvegarde l’original avec son journal", async () => {
+    const { key } = await prepare();
+    await bindDriveAccount("compte-synthétique");
+    await trackDriveEdition("compte-synthétique", key);
+    const result = await replaceEdition(key, replacement);
+    expect(result.key).not.toBe(key);
+    expect(await readManifest(key)).toBeUndefined();
+    expect(await readProgress(result.key)).toMatchObject({
+      modes: { section: "read" },
+    });
+    expect(await saveEdition(replacement)).toMatchObject({ key: result.key });
+    expect(await listBooks()).toEqual([
+      expect.objectContaining({ key: result.key, title: previousBook.title }),
+    ]);
+    expect(await readDriveSelections("compte-synthétique")).toEqual([]);
+    const archived = await exportPreviousEdition(result.key);
+    expect(archived).toMatchObject({
+      book: { title: previousBook.title },
+      progress: { modes: { section: "read" } },
+      events: [{ kind: "mode", scopeId: "section", mode: "read" }],
+    });
+  });
+
+  it("conserve l’édition et la progression si la publication échoue", async () => {
+    const { key } = await prepare();
+    const add = IDBObjectStore.prototype.add;
+    const probe = vi
+      .spyOn(IDBObjectStore.prototype, "add")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        value: unknown,
+        storageKey?: IDBValidKey,
+      ) {
+        if (this.name === "catalog")
+          throw new DOMException("Disque plein", "QuotaExceededError");
+        return add.call(this, value, storageKey);
+      });
+    try {
+      await expect(replaceEdition(key, replacement)).rejects.toMatchObject({
+        name: "QuotaExceededError",
+      });
+    } finally {
+      probe.mockRestore();
+    }
+    expect(await listBooks()).toEqual([
+      expect.objectContaining({ key, title: previousBook.title }),
+    ]);
+    expect(await readProgress(key)).toMatchObject({
+      modes: { section: "read" },
+    });
+    expect(await exportPreviousEdition(key)).toBeUndefined();
+  });
+
+  it("retire la copie active pour permettre la restauration locale sans réactiver Drive", async () => {
+    const { key } = await prepare();
+    await bindDriveAccount("compte-synthétique");
+    await trackDriveEdition("compte-synthétique", key);
+    const result = await replaceEdition(key, replacement);
+    await trackDriveEdition("compte-synthétique", result.key);
+    const previous = (await exportPreviousEdition(result.key))!;
+    await removeLocalEdition(result.key);
+    expect(await listBooks()).toEqual([]);
+    expect(await exportPreviousEdition(result.key)).toBeUndefined();
+    expect(await readResources(result.key, ["image"])).toEqual([]);
+    await restoreBookBackup(previous);
+    expect(await readDriveBinding()).toBe("compte-synthétique");
+    expect(await readDriveSelections("compte-synthétique")).toEqual([]);
+    expect(await readProgress(key)).toMatchObject({
+      modes: { section: "read" },
+    });
+  });
+
+  it("refuse le curseur d’un envoi commencé avant le retrait de l’ouvrage", async () => {
+    const { key } = await prepare();
+    await bindDriveAccount("compte-synthétique");
+    const old = (await readProgressJournal(key))!;
+    await removeLocalEdition(key);
+    await saveEdition(previousBook);
+    await ensureProgressJournal(key);
+    const current = (await readProgressJournal(key))!;
+    const pending = { sentThrough: 0, pendingThrough: 1 };
+    await expect(
+      writeDriveProgressCursor("compte-synthétique", key, pending, {
+        key,
+        deviceId: old.deviceId,
+      }),
+    ).rejects.toThrow(/journal/u);
+    expect(await readDriveProgressCursor("compte-synthétique", key)).toEqual({
+      sentThrough: 0,
+    });
+    await writeDriveProgressCursor("compte-synthétique", key, pending, {
+      key,
+      deviceId: current.deviceId,
+    });
+    expect(await readDriveProgressCursor("compte-synthétique", key)).toEqual(
+      pending,
+    );
+  });
+
+  it("conserve l’empreinte de la source à travers une sauvegarde de l’édition corrigée", async () => {
+    const { key } = await prepare();
+    const result = await replaceEdition(key, replacement);
+    const archive = await exportBookBackup(result.key);
+    await resetDatabase();
+    await restoreBookBackup(archive);
+    expect((await saveEdition(replacement)).key).toBe(result.key);
+    expect(await listBooks()).toHaveLength(1);
+
+    await resetDatabase();
+    const separate = await saveEdition({
+      ...replacement,
+      workId: "autre-ouvrage",
+    });
+    await expect(restoreBookBackup(archive)).rejects.toMatchObject({
+      name: "BackupAlreadyPresentError",
+    });
+    expect(await listBooks()).toEqual([separate]);
+  });
+
+  it("retrouve la même révision quand les deux appareils remplacent la même source", async () => {
+    const first = await prepare();
+    const revision = await replaceEdition(first.key, replacement);
+    await resetDatabase();
+    const second = await prepare();
+    expect(
+      await replaceEdition(second.key, {
+        ...replacement,
+        title: "Nouvelle édition (1)",
+      }),
+    ).toEqual(revision);
+    expect(await replaceEdition(revision.key, replacement)).toEqual({
+      ...revision,
+      replaced: false,
+    });
+    expect(await exportPreviousEdition(revision.key)).toMatchObject({
+      book: { title: previousBook.title },
+    });
+  });
+});
+
 describe("journal local de progression", () => {
   beforeEach(resetDatabase);
 
@@ -524,10 +868,10 @@ describe("journal local de progression", () => {
     ]);
     expect(await readProgressJournal(other.key)).toBeUndefined();
     await ensureProgressJournal(other.key);
-    expect(await readProgressJournal(other.key)).toEqual({
-      deviceId: journal?.deviceId,
-      events: [],
-    });
+    const otherJournal = await readProgressJournal(other.key);
+    expect(otherJournal?.events).toEqual([]);
+    expect(otherJournal?.deviceId).toBeTruthy();
+    expect(otherJournal?.deviceId).not.toBe(journal?.deviceId);
   });
 
   it("annule événement, état et résumé si la transaction échoue puis reprend à la même horloge", async () => {
@@ -575,7 +919,7 @@ describe("journal local de progression", () => {
     await ensureProgressJournal(entry.key);
     const journal = (await readProgressJournal(entry.key))!;
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open("blacture-library", 4);
+      const request = indexedDB.open("blacture-library");
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;
@@ -959,5 +1303,144 @@ describe("lecture d’une édition complète", () => {
     await expect(
       exportEdition(entry.key, AbortSignal.abort()),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("instantané local d’un ouvrage", () => {
+  beforeEach(resetDatabase);
+
+  it.each([3, 4])(
+    "préserve la progression du profil v%i sans initialiser son journal",
+    async (version) => {
+      const source = book();
+      const previous = {
+        observations: { p: { elapsedMs: 4000, coverage: 3 } },
+        modes: { child: "read", [BOOK_SCOPE]: "unread", section: "auto" },
+        last: { fragmentId: "first", blockId: "p" },
+      } as const;
+      const { key } =
+        version === 3
+          ? await seedLegacyEdition(source, 3)
+          : await saveEdition(source);
+      if (version === 4) {
+        await saveFontSize("small");
+        await updateProgress(key, () => ({ state: previous }));
+      }
+      const backup = await exportBookBackup(key);
+      expect(plainEdition(backup.book)).toEqual(plainEdition(source));
+      expect(backup.progress).toEqual(previous);
+      expect(backup.events).toEqual([]);
+      expect(await readProgressJournal(key)).toBeUndefined();
+      expect(await readFontSize()).toBe("small");
+    },
+  );
+
+  it("inclut les événements locaux et reçus sans données de compte ni autre édition", async () => {
+    const source = book();
+    const { key } = await saveEdition(source);
+    const other = await saveEdition(book("étrangère"));
+    await bindDriveAccount("compte-synthétique");
+    await trackDriveEdition("compte-synthétique", other.key);
+    await saveFontSize("large");
+
+    const index: ReadingIndex = {
+      sections: [{ id: "section", parentId: null, fragmentIds: ["first"] }],
+      fragments: { first: [{ id: "p", weight: 1 }] },
+    };
+    await updateProgress(key, (state) => ({
+      state: observeReading(index, state, "p", 4000, 3),
+      events: [
+        {
+          kind: "observe",
+          samples: [{ unitId: "p", elapsedMs: 4000, coverage: 3 }],
+        },
+      ],
+    }));
+    await updateProgress(other.key, (state) => ({
+      state: changeMode(index, state, BOOK_SCOPE, "read"),
+      events: [{ kind: "mode", scopeId: BOOK_SCOPE, mode: "read" }],
+    }));
+    const local = (await readProgressJournal(key))!.events;
+    const receipt: ProgressEvent = {
+      kind: "observe",
+      deviceId: "autre-appareil",
+      clock: 4,
+      samples: [{ unitId: "p", elapsedMs: 4000, coverage: 12 }],
+    };
+    await applyRemoteProgress(other.key, index, [{ ...receipt, clock: 7 }]);
+    const state = await applyRemoteProgress(key, index, [receipt]);
+    const backup = await exportBookBackup(key);
+    expect({ ...backup, book: plainEdition(backup.book) }).toEqual({
+      book: plainEdition(source),
+      progress: state,
+      events: [...local, receipt],
+    });
+    expect(await readProgressJournal(other.key)).toMatchObject({
+      events: [{ kind: "mode", scopeId: BOOK_SCOPE, mode: "read" }],
+    });
+  });
+
+  it("lit l’état et les événements cohérents pendant une écriture concurrente", async () => {
+    const { key } = await saveEdition(book());
+    await ensureProgressJournal(key);
+    const getAll = IDBObjectStore.prototype.getAll;
+    let writing: Promise<Awaited<ReturnType<typeof readProgress>>> | undefined;
+    const position = { fragmentId: "first" };
+    const probe = vi
+      .spyOn(IDBObjectStore.prototype, "getAll")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        query?: IDBValidKey | IDBKeyRange | null,
+        count?: number,
+      ) {
+        const request = getAll.call(this, query, count);
+        if (this.name === "progress-journal-events" && !writing) {
+          writing = updateProgress(key, (state) => ({
+            state: { ...state, last: position },
+            events: [{ kind: "visit", position }],
+          }));
+        }
+        return request;
+      });
+    try {
+      const backup = await exportBookBackup(key);
+      expect(writing).toBeDefined();
+      expect(backup.progress.last).toBeUndefined();
+      expect(backup.events).toEqual([]);
+    } finally {
+      probe.mockRestore();
+      await writing;
+    }
+    expect(await readProgress(key)).toMatchObject({ last: position });
+    expect((await readProgressJournal(key))?.events).toMatchObject([
+      { kind: "visit", position },
+    ]);
+  });
+
+  it("annule la lecture sans produire d’instantané partiel ni créer de journal", async () => {
+    const { key } = await saveEdition(book());
+    const controller = new AbortController();
+    const get = IDBObjectStore.prototype.get;
+    const probe = vi
+      .spyOn(IDBObjectStore.prototype, "get")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        query: IDBValidKey | IDBKeyRange,
+      ) {
+        const request = get.call(this, query);
+        if (this.name === "resources") controller.abort();
+        return request;
+      });
+    try {
+      await expect(
+        exportBookBackup(key, controller.signal),
+      ).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      probe.mockRestore();
+    }
+    expect(await readProgressJournal(key)).toBeUndefined();
+    await expect(exportBookBackup("absente")).rejects.toThrow(
+      "Ouvrage introuvable.",
+    );
   });
 });

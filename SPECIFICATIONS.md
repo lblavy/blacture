@@ -10,7 +10,7 @@ Statut : cadrage initial. « Confirmé » correspond au besoin retenu ; « propo
 
 Le lecteur ne dépend pas du format source et ne suppose aucune profondeur de sommaire ni nombre fixe de chapitres. Les textes sans titres, sections vides, titres répétés, niveaux sautés, contenu avant le premier titre et références croisées doivent être pris en compte. Pas d'import PDF, EPUB ou HTML séparé en V1 ; ne pas reconstruire la mise en page PDF à l'identique.
 
-**F03 — Éditions (objectif confirmé, modalités ouvertes).** Pouvoir réimporter une édition d'un ouvrage sans perdre silencieusement le suivi. Identifier les contenus inchangés, conserver leurs états et indiquer les contenus modifiés/ambigus/non migrables. Éviter les rapprochements hasardeux par titre seul. Les modalités de remplacement, conservation des versions, réconciliation et confirmation de migration sont à définir avant mise en œuvre. Une solution simple de migration suffit en V1 ; aucune gestion éditoriale complexe.
+**F03 — Éditions (confirmé).** Permettre de remplacer l’édition d’un ouvrage en conservant une seule entrée dans la bibliothèque. Migrer automatiquement les lectures, corrections et positions qui correspondent de façon fiable à la nouvelle édition. Indiquer la part du suivi qui ne peut être récupérée et conserver l’édition précédente et son suivi dans une sauvegarde. Une confirmation porte sur le remplacement de l’ouvrage. Les passages ambigus restent à relire et leur résolution manuelle est reportée.
 
 ## 2. Lecture et navigation
 

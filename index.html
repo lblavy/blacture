@@ -30,6 +30,16 @@
         <section class="library-import" aria-labelledby="import-title">
           <h2 id="import-title">Importer un ouvrage</h2>
           <form id="import-form">
+            <div id="import-replacement-field" hidden>
+              <label for="import-replacement">Remplacer un ouvrage</label>
+              <select id="import-replacement">
+                <option value="">Ajouter à la bibliothèque</option>
+              </select>
+              <p id="import-previous-note" hidden>
+                Une sauvegarde précédente existe déjà. Pour la conserver,
+                exportez-la avant de remplacer cet ouvrage.
+              </p>
+            </div>
             <label for="markdown-file">Fichier Markdown</label>
             <input
               type="file"
@@ -51,6 +61,34 @@
           <button type="button" id="request-persistence" hidden>
             Demander le stockage persistant
           </button>
+        </details>
+        <details id="backup-panel" class="storage-settings">
+          <summary>Sauvegarde locale</summary>
+          <div class="actions">
+            <label for="backup-book">Ouvrage à sauvegarder</label>
+            <select id="backup-book"></select>
+            <button type="button" id="backup-export" disabled>
+              Exporter la sauvegarde
+            </button>
+            <button type="button" id="backup-previous" hidden>
+              Exporter l’édition précédente
+            </button>
+            <button type="button" id="backup-remove" disabled>
+              Retirer de cet appareil
+            </button>
+          </div>
+          <div class="actions">
+            <label for="backup-file">Fichier de sauvegarde</label>
+            <input type="file" id="backup-file" accept=".blacture" />
+            <button type="button" id="backup-inspect" disabled>
+              Vérifier la sauvegarde
+            </button>
+            <button type="button" id="backup-restore" disabled>
+              Restaurer l’ouvrage
+            </button>
+            <button type="button" id="backup-cancel" hidden>Annuler</button>
+          </div>
+          <p id="backup-status" role="status"></p>
         </details>
         <details id="drive-panel" class="storage-settings" hidden>
           <summary>Google Drive</summary>

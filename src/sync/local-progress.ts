@@ -46,19 +46,30 @@ function observations(state: ProgressState): ReadingSample[] {
 export function initialProgressChanges(
   state: ProgressState,
   sections: readonly { id: string }[],
+  inherited = false,
 ): ProgressChange[] {
   const changes: ProgressChange[] = [];
   const samples = observations(state);
   for (let start = 0; start < samples.length; start += maxInitialSamples)
     changes.push({
-      kind: "observe",
+      kind: inherited ? "migrate" : "observe",
       samples: samples.slice(start, start + maxInitialSamples),
     });
   // A command on an ancestor resets its descendants. Replay ancestors first.
   for (const scopeId of [BOOK_SCOPE, ...sections.map(({ id }) => id)]) {
     if (Object.hasOwn(state.modes, scopeId))
-      changes.push({ kind: "mode", scopeId, mode: state.modes[scopeId]! });
+      changes.push({
+        kind: "mode",
+        scopeId,
+        mode: state.modes[scopeId]!,
+        ...(inherited ? { inherited: true } : {}),
+      });
   }
-  if (state.last) changes.push({ kind: "visit", position: state.last });
+  if (state.last)
+    changes.push({
+      kind: "visit",
+      position: state.last,
+      ...(inherited ? { inherited: true } : {}),
+    });
   return changes;
 }

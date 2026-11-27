@@ -30,4 +30,14 @@ La base locale passe en version 4. Après ouverture du candidat, rétablir le se
 
 Le prototype B01 reste disponible dans `work/pwa-b01/`. Les ouvrages privés sont sélectionnés en lecture seule et leurs données sont traitées dans le navigateur, sans ajout au build.
 
+### Sauvegarde locale B07
+
+Dans la bibliothèque, ouvrir **Sauvegarde locale**, choisir un ouvrage et cliquer sur **Exporter la sauvegarde**. Le navigateur télécharge un fichier `.blacture`. Pour contrôler le fichier, choisir **Vérifier la sauvegarde**. **Restaurer l’ouvrage** récupère le contenu et le suivi si l’ouvrage est absent du catalogue local. Ces opérations fonctionnent hors ligne une fois l’application chargée sur l’appareil.
+
+Pour réimporter une version corrigée, sélectionner l’ouvrage dans **Remplacer un ouvrage**, choisir le Markdown et cliquer sur **Remplacer l’ouvrage**. La bibliothèque tient une seule entrée par ouvrage remplacé. **Exporter l’édition précédente** récupère le contenu et le suivi d’origine. Avant un nouveau remplacement, exporter cette copie si elle doit être conservée.
+
+Pour revenir à l’ancienne édition sur le même appareil, exporter d’abord l’ancienne édition et la version actuelle depuis **Sauvegarde locale**. Choisir l’ouvrage, confirmer **Retirer de cet appareil**, puis restaurer le fichier de l’ancienne édition. Le retrait porte sur les données locales de cet ouvrage. Les fichiers Drive restent disponibles.
+
+Le build B07 ouvre la base locale en version 5. Pour rétablir l’application après son ouverture, utiliser une version compatible avec ce schéma. Mettre à jour les deux appareils avant de travailler avec une révision sur Drive. Dans **Ouvrages sur Drive**, le suffixe **édition mise à jour** identifie le paquet révisé. Télécharger la révision, confirmer le remplacement si le prédécesseur est présent puis synchroniser l’ouvrage pour envoyer le suivi récupéré sur cet appareil. Les résultats et limites figurent dans [B07](../BACKLOG.md#b07--éditions-récupération-et-stabilisation-f03f14-q11q13).
+
 Les preuves historiques Tauri, MAUI et Smart App Control sont dans [BACKLOG.md](../BACKLOG.md). La copie locale ignorée `work/tauri-b01/` conserve le shell Tauri, ses scripts et son verrou d’origine. Le projet Rust et Android historique reste dans `src-tauri/`. Les prototypes MAUI et PWA B01 restent dans `work/`.
